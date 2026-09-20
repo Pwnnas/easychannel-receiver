@@ -133,7 +133,43 @@
             }
         }
 
-        let preferredLanguage = 'sv';
+        function normalizeLang(code) {
+            if (!code) return '';
+            const clean = String(code).trim().toLowerCase().replace('_', '-');
+            const synonyms = {
+                'sv': 'swe', 'swe': 'swe',
+                'no': 'nor', 'nor': 'nor', 'nob': 'nor', 'nno': 'nor',
+                'da': 'dan', 'dan': 'dan',
+                'fi': 'fin', 'fin': 'fin',
+                'en': 'eng', 'eng': 'eng',
+                'de': 'deu', 'ger': 'deu', 'deu': 'deu',
+                'fr': 'fra', 'fre': 'fra', 'fra': 'fra',
+                'es': 'spa', 'spa': 'spa',
+                'it': 'ita', 'ita': 'ita',
+                'nl': 'nld', 'dut': 'nld', 'nld': 'nld',
+                'pl': 'pol', 'pol': 'pol',
+                'ru': 'rus', 'rus': 'rus'
+            };
+            if (synonyms[clean]) return synonyms[clean];
+            const prefix2 = clean.substring(0, 2);
+            if (synonyms[prefix2]) return synonyms[prefix2];
+            return clean;
+        }
+
+        function matchLang(code1, code2) {
+            if (!code1 && !code2) return true;
+            if (!code1 || !code2) return false;
+            const c1 = String(code1).trim().toLowerCase();
+            const c2 = String(code2).trim().toLowerCase();
+            if (c1 === c2) return true;
+            const n1 = normalizeLang(c1);
+            const n2 = normalizeLang(c2);
+            if (n1 && n1 === n2) return true;
+            if ((c1.length >= 2 && c2.length >= 2) && (c1.startsWith(c2 + '-') || c2.startsWith(c1 + '-'))) return true;
+            return false;
+        }
+
+        let preferredLanguage = '';
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
@@ -145,7 +181,7 @@
             if (customData && customData.preferredAudio) {
                 preferredLanguage = customData.preferredAudio;
             } else {
-                preferredLanguage = 'sv';
+                preferredLanguage = '';
             }
 
             showOverlay(title, 'Laddar ström...', logo, 8000);
@@ -154,16 +190,27 @@
 
         // Intercept EDIT_TRACKS_INFO to allow sender to switch audio tracks via standard Cast API
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.EDIT_TRACKS_INFO, request => {
-            console.log('[SeniorIPTV Receiver] EDIT_TRACKS_INFO received:', request);
+            console.log('[EasyChannel IPTV Receiver] EDIT_TRACKS_INFO received:', request);
             if (request.activeTrackIds && request.activeTrackIds.length > 0) {
                 const audioManager = playerManager.getAudioTracksManager();
                 const tracks = audioManager.getTracks() || [];
+                const mediaInfo = playerManager.getMediaInformation();
+                const mediaTracks = mediaInfo?.tracks || [];
+
                 for (const wantedId of request.activeTrackIds) {
-                    const match = tracks.find(t => t.trackId === wantedId);
-                    if (match) {
-                        console.log('[SeniorIPTV Receiver] Setting active audio track to ID:', match.trackId, match.language);
-                        audioManager.setActiveById(match.trackId);
-                        showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (match.name || match.language || match.trackId), null, 4000);
+                    const mTrack = mediaTracks.find(mt => mt.trackId === wantedId);
+                    let audioMatch = null;
+                    if (mTrack && mTrack.type === cast.framework.messages.TrackType.AUDIO) {
+                        audioMatch = tracks.find(t => matchLang(t.language, mTrack.language) && t.name === mTrack.name)
+                                  || tracks.find(t => matchLang(t.language, mTrack.language));
+                    }
+                    if (!audioMatch) {
+                        audioMatch = tracks.find(t => t.trackId === wantedId);
+                    }
+                    if (audioMatch) {
+                        console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', audioMatch.trackId, audioMatch.language);
+                        audioManager.setActiveById(audioMatch.trackId);
+                        showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
                         broadcastTrackList();
                         break;
                     }
@@ -174,35 +221,30 @@
 
         // Event: When media load completes and tracks are available
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
-            console.log('[SeniorIPTV Receiver] PLAYER_LOAD_COMPLETE');
+            console.log('[EasyChannel IPTV Receiver] PLAYER_LOAD_COMPLETE');
             const audioManager = playerManager.getAudioTracksManager();
             const tracks = audioManager.getTracks() || [];
-            console.log('[SeniorIPTV Receiver] Found audio tracks:', tracks);
+            console.log('[EasyChannel IPTV Receiver] Found audio tracks:', tracks);
 
-            // 1. Try selecting preferred language (e.g. sv / swe / custom)
-            let selected = false;
-            const targetLang = (preferredLanguage || 'sv').toLowerCase();
-            if (audioManager.setActiveByLanguage(targetLang)) {
-                selected = true;
-            } else if (targetLang === 'sv' && audioManager.setActiveByLanguage('swe')) {
-                selected = true;
-            } else {
-                // Fallback: search by language prefix or label
-                const matchedTrack = tracks.find(t => {
-                    const lang = (t.language || '').toLowerCase();
-                    const name = (t.name || '').toLowerCase();
-                    return lang.startsWith(targetLang) || name.includes(targetLang) ||
-                           (targetLang === 'sv' && (lang.startsWith('swe') || name.includes('swe') || name.includes('svensk')));
-                });
+            if (preferredLanguage) {
+                const normTarget = normalizeLang(preferredLanguage);
+                let matchedTrack = tracks.find(t => matchLang(t.language, preferredLanguage));
+                if (!matchedTrack) {
+                    matchedTrack = tracks.find(t => {
+                        const name = (t.name || '').toLowerCase();
+                        return name.includes(preferredLanguage.toLowerCase()) || (normTarget && name.includes(normTarget));
+                    });
+                }
                 if (matchedTrack) {
-                    console.log('[SeniorIPTV Receiver] Selecting audio track by ID:', matchedTrack.trackId);
+                    console.log('[EasyChannel IPTV Receiver] Selecting initial audio track by ID:', matchedTrack.trackId, matchedTrack.language);
                     audioManager.setActiveById(matchedTrack.trackId);
-                    selected = true;
+                } else {
+                    audioManager.setActiveByLanguage(preferredLanguage);
                 }
             }
 
             const currentActive = audioManager.getActiveTrack();
-            const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Svenska') : 'Standard';
+            const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Standard') : 'Standard';
             showOverlay(document.getElementById('channel-title').textContent, 'Spelar • ' + langLabel, null, 5000);
 
             // Send full track list back to Android sender app
@@ -214,13 +256,37 @@
             const data = event.data;
             console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
 
-            if (data.type === 'SELECT_TRACK_ID') {
+            if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
                 const audioManager = playerManager.getAudioTracksManager();
-                audioManager.setActiveById(Number(data.trackId));
-                broadcastTrackList();
+                const tracks = audioManager.getTracks() || [];
+                let match = null;
+
+                // Priority 1: Match by language (+ name if available)
+                if (data.language) {
+                    match = tracks.find(t => matchLang(t.language, data.language) && (!data.name || t.name === data.name))
+                         || tracks.find(t => matchLang(t.language, data.language));
+                }
+
+                // Priority 2: Match by exact trackId
+                if (!match && data.trackId !== undefined) {
+                    match = tracks.find(t => t.trackId === Number(data.trackId));
+                }
+
+                if (match) {
+                    console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', match.trackId, match.language, match.name);
+                    audioManager.setActiveById(match.trackId);
+                    showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (match.name || match.language || match.trackId), null, 4000);
+                    broadcastTrackList();
+                }
             } else if (data.type === 'SELECT_LANGUAGE') {
                 const audioManager = playerManager.getAudioTracksManager();
-                audioManager.setActiveByLanguage(data.language);
+                const tracks = audioManager.getTracks() || [];
+                const match = tracks.find(t => matchLang(t.language, data.language));
+                if (match) {
+                    audioManager.setActiveById(match.trackId);
+                } else {
+                    audioManager.setActiveByLanguage(data.language);
+                }
                 broadcastTrackList();
             } else if (data.type === 'QUERY_TRACKS') {
                 broadcastTrackList();
