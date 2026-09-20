@@ -198,8 +198,12 @@
                 preferredLanguage = '';
             }
 
+            window.__ecFixTried = false;
+            window.__ecFixApplied = false;
             diagnosticTimers.forEach(clearTimeout);
+            // First sample is pre-fix; the experiment is applied just after it.
             diagnosticTimers = [5000, 15000, 30000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
+            diagnosticTimers.push(setTimeout(applyHostSizeExperiment, 6500));
             showOverlay(title, 'Laddar ström...', logo, 8000);
             return loadRequestData;
         });
@@ -369,22 +373,59 @@
         };
 
         // Bounded diagnostics on explicit request; no media URLs or credentials.
+        function rectOf(el) {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+        }
+
+        // One-shot experiment: give the host element a real layout box.
+        function applyHostSizeExperiment() {
+            if (window.__ecFixTried) return;
+            window.__ecFixTried = true;
+            const host = document.getElementById('media-player');
+            if (!host) return;
+            host.style.display = 'block';
+            host.style.position = 'fixed';
+            host.style.top = '0';
+            host.style.left = '0';
+            host.style.width = '100%';
+            host.style.height = '100%';
+            window.__ecFixApplied = true;
+        }
+
         function sendDiagnostics() {
             try {
                 const stats = playerManager.getStats();
                 const host = document.getElementById('media-player');
-                const video = host?.shadowRoot?.querySelector('video') || document.querySelector('video');
+                const sr = host?.shadowRoot;
+                const video = sr?.querySelector('video') || document.querySelector('video');
+                const playerEl = sr?.getElementById('castPlayer');
+                const fg = sr?.querySelector('.foreground');
                 const compStyle = video ? window.getComputedStyle(video) : null;
+                const hostStyle = host ? window.getComputedStyle(host) : null;
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'PLAYBACK_DIAGNOSTICS',
-                    version: 'hls-20260920-2',
+                    version: 'diag-3-layout',
                     state: playerManager.getPlayerState(),
                     time: playerManager.getCurrentTimeSec(),
-                    width: stats.width, height: stats.height,
+                    statsW: stats.width, statsH: stats.height,
                     decodedFrames: stats.decodedFrames, droppedFrames: stats.droppedFrames,
                     videoWidth: video?.videoWidth, videoHeight: video?.videoHeight,
                     readyState: video?.readyState, error: video?.error?.code,
-                    display: compStyle?.display, visibility: compStyle?.visibility, opacity: compStyle?.opacity
+                    display: compStyle?.display, visibility: compStyle?.visibility, opacity: compStyle?.opacity,
+                    viewport: [window.innerWidth, window.innerHeight, window.devicePixelRatio],
+                    bodyRect: rectOf(document.body),
+                    hostRect: rectOf(host),
+                    hostDisplay: hostStyle?.display, hostPosition: hostStyle?.position,
+                    hostCssW: hostStyle?.width, hostCssH: hostStyle?.height, hostOverflow: hostStyle?.overflow,
+                    playerRect: rectOf(playerEl),
+                    playerState: playerEl?.getAttribute('data-state'),
+                    playerCategory: playerEl?.getAttribute('data-media-category'),
+                    foregroundRect: rectOf(fg),
+                    videoRect: rectOf(video),
+                    shadow: !!sr,
+                    fixApplied: window.__ecFixApplied === true
                 });
             } catch (error) { console.warn('Diagnostics unavailable', error); }
         }
