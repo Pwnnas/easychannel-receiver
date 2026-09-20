@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>BisectC</title>
+<title>BisectD</title>
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <style>
     #channel-overlay {
@@ -12,7 +12,6 @@
         display: flex;
         align-items: center;
         background: rgba(16, 40, 69, 0.85);
-        backdrop-filter: blur(12px);
         padding: 16px 24px;
         border-radius: 16px;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -39,7 +38,7 @@ context.addCustomMessageListener(NS, (e) => {
         const s = playerManager.getStats();
         const video = document.querySelector('cast-media-player').shadowRoot.querySelector('video');
         context.sendCustomMessage(NS, undefined, {
-            type: 'PLAYBACK_DIAGNOSTICS', version: 'bisectC',
+            type: 'PLAYBACK_DIAGNOSTICS', version: 'bisectD',
             state: playerManager.getPlayerState(),
             videoWidth: video && video.videoWidth, decodedFrames: s.decodedFrames
         });
