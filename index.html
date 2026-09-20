@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="utf-8">
+    <title>Senior IPTV Cast Receiver</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #06152B;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        cast-media-player {
+            width: 100vw;
+            height: 100vh;
+            --theme-hue: 45; /* Golden Accent */
+            --splash-image: none;
+            --watermark-image: none;
+        }
+
+        #channel-overlay {
+            position: absolute;
+            top: 48px;
+            left: 48px;
+            display: flex;
+            align-items: center;
+            background: rgba(16, 40, 69, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+            pointer-events: none;
+        }
+
+        #channel-overlay.visible {
+            opacity: 1;
+        }
+
+        #channel-logo {
+            width: 56px;
+            height: 56px;
+            object-fit: contain;
+            margin-right: 16px;
+            border-radius: 8px;
+            display: none;
+        }
+
+        #channel-title {
+            color: #FFFFFF;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        #channel-status {
+            color: #FFD166;
+            font-size: 18px;
+            font-weight: 500;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="channel-overlay">
+        <img id="channel-logo" alt="">
+        <div>
+            <div id="channel-title">Senior IPTV</div>
+            <div id="channel-status">Ansluten</div>
+        </div>
+    </div>
+
+    <cast-media-player id="media-player"></cast-media-player>
+
+    <script>
+        const CUSTOM_CHANNEL = 'urn:x-cast:com.senioriptv';
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const playerManager = context.getPlayerManager();
+
+        let hideOverlayTimer = null;
+        function showOverlay(title, status, logoUrl, durationMs = 6000) {
+            const overlay = document.getElementById('channel-overlay');
+            const titleEl = document.getElementById('channel-title');
+            const statusEl = document.getElementById('channel-status');
+            const logoEl = document.getElementById('channel-logo');
+
+            titleEl.textContent = title || 'Senior IPTV';
+            statusEl.textContent = status || '';
+
+            if (logoUrl) {
+                logoEl.src = logoUrl;
+                logoEl.style.display = 'block';
+            } else {
+                logoEl.style.display = 'none';
+            }
+
+            overlay.classList.add('visible');
+            if (hideOverlayTimer) clearTimeout(hideOverlayTimer);
+            if (durationMs > 0) {
+                hideOverlayTimer = setTimeout(() => overlay.classList.remove('visible'), durationMs);
+            }
+        }
+
+        function broadcastTrackList() {
+            try {
+                const audioManager = playerManager.getAudioTracksManager();
+                const tracks = audioManager.getTracks() || [];
+                const active = audioManager.getActiveTrack();
+
+                const payload = {
+                    type: 'TRACKS_UPDATE',
+                    tracks: tracks.map(t => ({
+                        id: t.trackId,
+                        language: t.language || '',
+                        name: t.name || t.language || `Spår ${t.trackId}`,
+                        isSelected: active ? (t.trackId === active.trackId) : false
+                    }))
+                };
+
+                console.log('[SeniorIPTV Receiver] Broadcasting tracks:', payload);
+                context.sendCustomMessage(CUSTOM_CHANNEL, undefined, payload);
+            } catch (err) {
+                console.warn('[SeniorIPTV Receiver] Could not broadcast tracks:', err);
+            }
+        }
+
+        let preferredLanguage = 'sv';
+
+        // Intercept LOAD request to read metadata and preferred audio
+        playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
+            const media = loadRequestData.media;
+            const metadata = media?.metadata;
+            const title = metadata?.title || 'Senior IPTV';
+            const logo = metadata?.images?.[0]?.url;
+            const customData = loadRequestData.customData || media?.customData;
+            if (customData && customData.preferredAudio) {
+                preferredLanguage = customData.preferredAudio;
+            } else {
+                preferredLanguage = 'sv';
+            }
+
+            showOverlay(title, 'Laddar ström...', logo, 8000);
+            return loadRequestData;
+        });
+
+        // Intercept EDIT_TRACKS_INFO to allow sender to switch audio tracks via standard Cast API
+        playerManager.setMessageInterceptor(cast.framework.messages.MessageType.EDIT_TRACKS_INFO, request => {
+            console.log('[SeniorIPTV Receiver] EDIT_TRACKS_INFO received:', request);
+            if (request.activeTrackIds && request.activeTrackIds.length > 0) {
+                const audioManager = playerManager.getAudioTracksManager();
+                const tracks = audioManager.getTracks() || [];
+                for (const wantedId of request.activeTrackIds) {
+                    const match = tracks.find(t => t.trackId === wantedId);
+                    if (match) {
+                        console.log('[SeniorIPTV Receiver] Setting active audio track to ID:', match.trackId, match.language);
+                        audioManager.setActiveById(match.trackId);
+                        showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (match.name || match.language || match.trackId), null, 4000);
+                        broadcastTrackList();
+                        break;
+                    }
+                }
+            }
+            return request;
+        });
+
+        // Event: When media load completes and tracks are available
+        playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
+            console.log('[SeniorIPTV Receiver] PLAYER_LOAD_COMPLETE');
+            const audioManager = playerManager.getAudioTracksManager();
+            const tracks = audioManager.getTracks() || [];
+            console.log('[SeniorIPTV Receiver] Found audio tracks:', tracks);
+
+            // 1. Try selecting preferred language (e.g. sv / swe / custom)
+            let selected = false;
+            const targetLang = (preferredLanguage || 'sv').toLowerCase();
+            if (audioManager.setActiveByLanguage(targetLang)) {
+                selected = true;
+            } else if (targetLang === 'sv' && audioManager.setActiveByLanguage('swe')) {
+                selected = true;
+            } else {
+                // Fallback: search by language prefix or label
+                const matchedTrack = tracks.find(t => {
+                    const lang = (t.language || '').toLowerCase();
+                    const name = (t.name || '').toLowerCase();
+                    return lang.startsWith(targetLang) || name.includes(targetLang) ||
+                           (targetLang === 'sv' && (lang.startsWith('swe') || name.includes('swe') || name.includes('svensk')));
+                });
+                if (matchedTrack) {
+                    console.log('[SeniorIPTV Receiver] Selecting audio track by ID:', matchedTrack.trackId);
+                    audioManager.setActiveById(matchedTrack.trackId);
+                    selected = true;
+                }
+            }
+
+            const currentActive = audioManager.getActiveTrack();
+            const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Svenska') : 'Standard';
+            showOverlay(document.getElementById('channel-title').textContent, 'Spelar • ' + langLabel, null, 5000);
+
+            // Send full track list back to Android sender app
+            setTimeout(broadcastTrackList, 500);
+        });
+
+        // Custom Message Channel for direct sender commands
+        context.addCustomMessageListener(CUSTOM_CHANNEL, event => {
+            const data = event.data;
+            console.log('[SeniorIPTV Receiver] Custom message received:', data);
+
+            if (data.type === 'SELECT_TRACK_ID') {
+                const audioManager = playerManager.getAudioTracksManager();
+                audioManager.setActiveById(Number(data.trackId));
+                broadcastTrackList();
+            } else if (data.type === 'SELECT_LANGUAGE') {
+                const audioManager = playerManager.getAudioTracksManager();
+                audioManager.setActiveByLanguage(data.language);
+                broadcastTrackList();
+            } else if (data.type === 'QUERY_TRACKS') {
+                broadcastTrackList();
+            }
+        });
+
+        // Playback configuration for IPTV HLS / TS live streams
+        const playbackConfig = new cast.framework.PlaybackConfig();
+        playbackConfig.autoResumeDuration = 5;
+
+        context.start({
+            playbackConfig: playbackConfig,
+            customNamespaces: {
+                [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON
+            }
+        });
+        console.log('[SeniorIPTV Receiver] Cast Receiver Context started');
+    </script>
+</body>
+</html>
