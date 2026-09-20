@@ -224,6 +224,7 @@
                         audioManager.setActiveById(audioMatch.trackId);
                         showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
                         broadcastTrackList();
+                        request.activeTrackIds = [audioMatch.trackId];
                         break;
                     }
                 }
@@ -251,7 +252,11 @@
                     console.log('[EasyChannel IPTV Receiver] Selecting initial audio track by ID:', matchedTrack.trackId, matchedTrack.language);
                     audioManager.setActiveById(matchedTrack.trackId);
                 } else {
-                    audioManager.setActiveByLanguage(preferredLanguage);
+                    try {
+                        audioManager.setActiveByLanguage(preferredLanguage);
+                    } catch (err) {
+                        console.warn('[EasyChannel IPTV Receiver] Preferred audio language unavailable:', preferredLanguage, err);
+                    }
                 }
             }
 
@@ -297,7 +302,11 @@
                 if (match) {
                     audioManager.setActiveById(match.trackId);
                 } else {
-                    audioManager.setActiveByLanguage(data.language);
+                    try {
+                        audioManager.setActiveByLanguage(data.language);
+                    } catch (err) {
+                        console.warn('[EasyChannel IPTV Receiver] Language unavailable:', data.language, err);
+                    }
                 }
                 broadcastTrackList();
             } else if (data.type === 'QUERY_TRACKS') {
