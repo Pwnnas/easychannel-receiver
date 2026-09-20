@@ -1,36 +1,85 @@
 <!DOCTYPE html>
-<html>
+<html lang="sv">
 <head>
-<meta charset="utf-8">
-<title>Minimal</title>
-<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <meta charset="utf-8">
+    <title>BisectA</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            background-color: #041E3E;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        cast-media-player {
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            --theme-hue: 45;
+            --splash-image: none;
+            --watermark-image: none;
+        }
+
+        #channel-overlay {
+            position: absolute;
+            top: 48px;
+            left: 48px;
+            display: flex;
+            align-items: center;
+            background: rgba(16, 40, 69, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+            pointer-events: none;
+        }
+    </style>
 </head>
 <body>
-<cast-media-player id="player"></cast-media-player>
-<script>
-const NS = 'urn:x-cast:com.easychannel.iptv';
-const context = cast.framework.CastReceiverContext.getInstance();
-const playerManager = context.getPlayerManager();
+    <div id="channel-overlay">
+        <div id="channel-title">EasyChannel IPTV</div>
+        <div id="channel-status">Ansluten</div>
+    </div>
 
-context.addCustomMessageListener(NS, (e) => {
-    if (e.data && e.data.type === 'QUERY_DIAGNOSTICS') {
-        const s = playerManager.getStats();
-        const video = document.querySelector('cast-media-player').shadowRoot.querySelector('video');
-        context.sendCustomMessage(NS, undefined, {
-            type: 'PLAYBACK_DIAGNOSTICS',
-            version: 'minimal-1',
-            state: playerManager.getPlayerState(),
-            videoWidth: video && video.videoWidth,
-            videoHeight: video && video.videoHeight,
-            decodedFrames: s.decodedFrames,
-            droppedFrames: s.droppedFrames
+    <cast-media-player id="media-player"></cast-media-player>
+
+    <script>
+        const NS = 'urn:x-cast:com.easychannel.iptv';
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const playerManager = context.getPlayerManager();
+
+        context.addCustomMessageListener(NS, (e) => {
+            if (e.data && e.data.type === 'QUERY_DIAGNOSTICS') {
+                const s = playerManager.getStats();
+                const video = document.querySelector('cast-media-player').shadowRoot.querySelector('video');
+                context.sendCustomMessage(NS, undefined, {
+                    type: 'PLAYBACK_DIAGNOSTICS',
+                    version: 'bisectA',
+                    state: playerManager.getPlayerState(),
+                    videoWidth: video && video.videoWidth,
+                    decodedFrames: s.decodedFrames
+                });
+            }
         });
-    }
-});
 
-context.start({
-    customNamespaces: { [NS]: cast.framework.system.MessageType.JSON }
-});
-</script>
+        context.start({
+            customNamespaces: { [NS]: cast.framework.system.MessageType.JSON }
+        });
+    </script>
 </body>
 </html>
