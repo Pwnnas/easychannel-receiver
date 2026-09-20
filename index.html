@@ -9,7 +9,7 @@
         body {
             margin: 0;
             padding: 0;
-            background-color: #06152B;
+            background-color: #041E3E;
             overflow: hidden;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
@@ -18,7 +18,7 @@
             width: 100vw;
             height: 100vh;
             --theme-hue: 45; /* Golden Accent */
-            --splash-image: url('easychannelsplashscreen.png');
+            --splash-image: url('tv_splash.png');
             --watermark-image: none;
         }
 
@@ -261,15 +261,15 @@
                 const tracks = audioManager.getTracks() || [];
                 let match = null;
 
-                // Priority 1: Match by language (+ name if available)
-                if (data.language) {
-                    match = tracks.find(t => matchLang(t.language, data.language) && (!data.name || t.name === data.name))
-                         || tracks.find(t => matchLang(t.language, data.language));
+                // Priority 1: Match by exact trackId
+                if (data.trackId !== undefined && data.trackId !== null) {
+                    match = tracks.find(t => t.trackId === Number(data.trackId));
                 }
 
-                // Priority 2: Match by exact trackId
-                if (!match && data.trackId !== undefined) {
-                    match = tracks.find(t => t.trackId === Number(data.trackId));
+                // Priority 2: Match by language (+ name if available)
+                if (!match && data.language) {
+                    match = tracks.find(t => matchLang(t.language, data.language) && (!data.name || t.name === data.name))
+                         || tracks.find(t => matchLang(t.language, data.language));
                 }
 
                 if (match) {
