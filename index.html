@@ -173,6 +173,7 @@
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
+            console.log('[EasyChannel IPTV Receiver] LOAD RECEIVED', JSON.stringify(loadRequestData));
             const media = loadRequestData.media;
             if (media) {
                 if (media.contentUrl && media.contentUrl.endsWith('.ts')) {
@@ -196,7 +197,7 @@
                 preferredLanguage = '';
             }
 
-            showOverlay(title, 'Laddar ström...', logo, 8000);
+            showOverlay(title, 'LOAD mottagen', logo, 0);
             return loadRequestData;
         });
 
@@ -315,14 +316,21 @@
         }
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
-            console.error('[EasyChannel IPTV Receiver] Player ERROR:', event);
-            const errDetail = event.detailedErrorCode || event.reason || 'Spelfel';
-            showOverlay(document.getElementById('channel-title').textContent, 'Fel: ' + errDetail, null, 15000);
+            console.error('[EasyChannel IPTV Receiver] PLAYBACK ERROR', {
+                detailedErrorCode: event.detailedErrorCode,
+                reason: event.reason,
+                severity: event.severity,
+                error: event.error,
+                triggeredByEventType: event.triggeredByEventType
+            });
+            const errDetail = event.detailedErrorCode || event.reason || 'okänt';
+            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', 'Fel: ' + errDetail, null, 0);
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
                     detailedErrorCode: event.detailedErrorCode,
-                    reason: event.reason
+                    reason: event.reason,
+                    severity: event.severity
                 });
             } catch (_) {}
         });
