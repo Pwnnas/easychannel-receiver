@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
     <meta charset="utf-8">
-    <title>Senior IPTV Cast Receiver</title>
+    <title>EasyChannel IPTV Cast Receiver</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <style>
@@ -72,7 +72,7 @@
     <div id="channel-overlay">
         <img id="channel-logo" alt="">
         <div>
-            <div id="channel-title">Senior IPTV</div>
+            <div id="channel-title">EasyChannel IPTV</div>
             <div id="channel-status">Ansluten</div>
         </div>
     </div>
@@ -80,7 +80,8 @@
     <cast-media-player id="media-player"></cast-media-player>
 
     <script>
-        const CUSTOM_CHANNEL = 'urn:x-cast:com.senioriptv';
+        const CUSTOM_CHANNEL = 'urn:x-cast:com.easychannel.iptv';
+        const LEGACY_CHANNEL = 'urn:x-cast:com.senioriptv';
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
 
@@ -91,7 +92,7 @@
             const statusEl = document.getElementById('channel-status');
             const logoEl = document.getElementById('channel-logo');
 
-            titleEl.textContent = title || 'Senior IPTV';
+            titleEl.textContent = title || 'EasyChannel IPTV';
             statusEl.textContent = status || '';
 
             if (logoUrl) {
@@ -124,10 +125,11 @@
                     }))
                 };
 
-                console.log('[SeniorIPTV Receiver] Broadcasting tracks:', payload);
+                console.log('[EasyChannel IPTV Receiver] Broadcasting tracks:', payload);
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, payload);
+                context.sendCustomMessage(LEGACY_CHANNEL, undefined, payload);
             } catch (err) {
-                console.warn('[SeniorIPTV Receiver] Could not broadcast tracks:', err);
+                console.warn('[EasyChannel IPTV Receiver] Could not broadcast tracks:', err);
             }
         }
 
@@ -137,7 +139,7 @@
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
             const media = loadRequestData.media;
             const metadata = media?.metadata;
-            const title = metadata?.title || 'Senior IPTV';
+            const title = metadata?.title || 'EasyChannel IPTV';
             const logo = metadata?.images?.[0]?.url;
             const customData = loadRequestData.customData || media?.customData;
             if (customData && customData.preferredAudio) {
@@ -208,9 +210,9 @@
         });
 
         // Custom Message Channel for direct sender commands
-        context.addCustomMessageListener(CUSTOM_CHANNEL, event => {
+        function handleCustomMessage(event) {
             const data = event.data;
-            console.log('[SeniorIPTV Receiver] Custom message received:', data);
+            console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
 
             if (data.type === 'SELECT_TRACK_ID') {
                 const audioManager = playerManager.getAudioTracksManager();
@@ -223,7 +225,10 @@
             } else if (data.type === 'QUERY_TRACKS') {
                 broadcastTrackList();
             }
-        });
+        }
+
+        context.addCustomMessageListener(CUSTOM_CHANNEL, handleCustomMessage);
+        context.addCustomMessageListener(LEGACY_CHANNEL, handleCustomMessage);
 
         // Playback configuration for IPTV HLS / TS live streams
         const playbackConfig = new cast.framework.PlaybackConfig();
@@ -232,10 +237,11 @@
         context.start({
             playbackConfig: playbackConfig,
             customNamespaces: {
-                [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON
+                [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
+                [LEGACY_CHANNEL]: cast.framework.system.MessageType.JSON
             }
         });
-        console.log('[SeniorIPTV Receiver] Cast Receiver Context started');
+        console.log('[EasyChannel IPTV Receiver] Cast Receiver Context started');
     </script>
 </body>
 </html>
