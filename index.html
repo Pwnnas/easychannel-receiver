@@ -6,17 +6,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <style>
-        body {
+        html, body {
             margin: 0;
             padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
             background-color: #041E3E;
             overflow: hidden;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
+        /* The host must be a real, full-viewport box: custom elements default to
+           display:inline, which ignores width/height and collapses the internal
+           <video> surface to a single pixel. */
         cast-media-player {
-            width: 100vw;
-            height: 100vh;
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             --theme-hue: 45; /* Golden Accent */
             --splash-image: none;
             --watermark-image: none;
@@ -198,12 +210,9 @@
                 preferredLanguage = '';
             }
 
-            window.__ecFixTried = false;
-            window.__ecFixApplied = false;
+            reportCollapsedHost();
             diagnosticTimers.forEach(clearTimeout);
-            // Samples 5-15s are pre-fix while playing; the host-size experiment runs at 17s.
-            diagnosticTimers = [5000, 10000, 15000, 20000, 25000, 30000, 45000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
-            diagnosticTimers.push(setTimeout(applyHostSizeExperiment, 17000));
+            diagnosticTimers = [5000, 10000, 15000, 20000, 30000, 45000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
             showOverlay(title, 'Laddar ström...', logo, 8000);
             return loadRequestData;
         });
@@ -379,19 +388,14 @@
             return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
         }
 
-        // One-shot experiment: give the host element a real layout box.
-        function applyHostSizeExperiment() {
-            if (window.__ecFixTried) return;
-            window.__ecFixTried = true;
+        // One-shot: report the host layout box if it is still collapsed.
+        function reportCollapsedHost() {
             const host = document.getElementById('media-player');
             if (!host) return;
-            host.style.display = 'block';
-            host.style.position = 'fixed';
-            host.style.top = '0';
-            host.style.left = '0';
-            host.style.width = '100%';
-            host.style.height = '100%';
-            window.__ecFixApplied = true;
+            const r = host.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) {
+                console.warn('[EasyChannel IPTV Receiver] cast-media-player has no layout box', r.width, r.height);
+            }
         }
 
         function sendDiagnostics() {
@@ -406,7 +410,7 @@
                 const hostStyle = host ? window.getComputedStyle(host) : null;
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'PLAYBACK_DIAGNOSTICS',
-                    version: 'diag-3-layout',
+                    version: 'fix-1-hostsizing',
                     state: playerManager.getPlayerState(),
                     time: playerManager.getCurrentTimeSec(),
                     statsW: stats.width, statsH: stats.height,
@@ -425,7 +429,7 @@
                     foregroundRect: rectOf(fg),
                     videoRect: rectOf(video),
                     shadow: !!sr,
-                    fixApplied: window.__ecFixApplied === true
+                    fixApplied: true
                 });
             } catch (error) { console.warn('Diagnostics unavailable', error); }
         }
