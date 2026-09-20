@@ -353,27 +353,17 @@
         context.addCustomMessageListener(CUSTOM_CHANNEL, handleCustomMessage);
         context.addCustomMessageListener(LEGACY_CHANNEL, handleCustomMessage);
 
-        // Playback configuration for IPTV HLS / TS live streams
+        // Playback configuration for IPTV HLS / TS live streams.
+        // NOTE: do NOT enable useShakaForHls. Shaka's HLS parser cannot switch
+        // muxed multi-audio tracks (Swedish/English/Finnish etc.), so the TV
+        // would always play the default audio. The native Cast HLS player
+        // handles the proxy's single-variant muxed TS correctly.
         const playbackConfig = new cast.framework.PlaybackConfig();
         playbackConfig.autoResumeDuration = 5;
-        playbackConfig.shakaConfig = {
-            streaming: {
-                bufferingGoal: 4,
-                rebufferingGoal: 2,
-                bufferBehind: 15,
-                inaccurateManifestTolerance: 2
-            },
-            manifest: {
-                hls: {
-                    ignoreTextStreamFailures: true
-                }
-            }
-        };
 
 
         context.start({
-            useShakaForHls: true,
-            versionCode: 2026092002,
+            versionCode: 2026092003,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
