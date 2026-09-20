@@ -170,6 +170,7 @@
         }
 
         let preferredLanguage = '';
+        let diagnosticTimers = [];
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
@@ -197,7 +198,9 @@
                 preferredLanguage = '';
             }
 
-            showOverlay(title, 'LOAD mottagen', logo, 0);
+            diagnosticTimers.forEach(clearTimeout);
+            diagnosticTimers = [5000, 15000, 30000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
+            showOverlay(title, 'Laddar ström...', logo, 8000);
             return loadRequestData;
         });
 
@@ -352,24 +355,31 @@
         const playbackConfig = new cast.framework.PlaybackConfig();
         playbackConfig.autoResumeDuration = 5;
 
-        // Register Shaka Player response filter to remove #EXT-X-ENDLIST from live IPTV streams
-        if (typeof shaka !== 'undefined' && shaka.net && shaka.net.NetworkingEngine) {
-            shaka.net.NetworkingEngine.registerResponseFilter((type, response) => {
-                if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
-                    try {
-                        const str = new TextDecoder('utf-8').decode(response.data);
-                        if (str.includes('#EXT-X-ENDLIST')) {
-                            console.log('[EasyChannel IPTV Receiver] Stripping #EXT-X-ENDLIST from live playlist');
-                            response.data = new TextEncoder().encode(str.replace(/#EXT-X-ENDLIST/g, ''));
-                        }
-                    } catch (e) {
-                        console.warn('[EasyChannel IPTV Receiver] Filter error:', e);
-                    }
-                }
-            });
+        // Bounded diagnostics on explicit request; no media URLs or credentials.
+        function sendDiagnostics() {
+            try {
+                const stats = playerManager.getStats();
+                const host = document.getElementById('media-player');
+                const video = host?.shadowRoot?.querySelector('video') || document.querySelector('video');
+                context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
+                    type: 'PLAYBACK_DIAGNOSTICS',
+                    version: 'hls-20260920-1',
+                    state: playerManager.getPlayerState(),
+                    time: playerManager.getCurrentTimeSec(),
+                    width: stats.width, height: stats.height,
+                    decodedFrames: stats.decodedFrames, droppedFrames: stats.droppedFrames,
+                    videoWidth: video?.videoWidth, videoHeight: video?.videoHeight,
+                    readyState: video?.readyState, error: video?.error?.code
+                });
+            } catch (error) { console.warn('Diagnostics unavailable', error); }
         }
+        context.addCustomMessageListener(CUSTOM_CHANNEL, event => {
+            if (event.data?.type === 'QUERY_DIAGNOSTICS') sendDiagnostics();
+        });
 
         context.start({
+            useShakaForHls: true,
+            versionCode: 2026092001,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
