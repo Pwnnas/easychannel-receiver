@@ -18,7 +18,7 @@
             width: 100vw;
             height: 100vh;
             --theme-hue: 45; /* Golden Accent */
-            --splash-image: url('tv_splash.png');
+            --splash-image: none;
             --watermark-image: none;
         }
 
@@ -354,6 +354,19 @@
         // Playback configuration for IPTV HLS / TS live streams
         const playbackConfig = new cast.framework.PlaybackConfig();
         playbackConfig.autoResumeDuration = 5;
+        playbackConfig.shakaConfig = {
+            streaming: {
+                bufferingGoal: 4,
+                rebufferingGoal: 2,
+                bufferBehind: 15,
+                inaccurateManifestTolerance: 2
+            },
+            manifest: {
+                hls: {
+                    ignoreTextStreamFailures: true
+                }
+            }
+        };
 
         // Bounded diagnostics on explicit request; no media URLs or credentials.
         function sendDiagnostics() {
@@ -361,15 +374,17 @@
                 const stats = playerManager.getStats();
                 const host = document.getElementById('media-player');
                 const video = host?.shadowRoot?.querySelector('video') || document.querySelector('video');
+                const compStyle = video ? window.getComputedStyle(video) : null;
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'PLAYBACK_DIAGNOSTICS',
-                    version: 'hls-20260920-1',
+                    version: 'hls-20260920-2',
                     state: playerManager.getPlayerState(),
                     time: playerManager.getCurrentTimeSec(),
                     width: stats.width, height: stats.height,
                     decodedFrames: stats.decodedFrames, droppedFrames: stats.droppedFrames,
                     videoWidth: video?.videoWidth, videoHeight: video?.videoHeight,
-                    readyState: video?.readyState, error: video?.error?.code
+                    readyState: video?.readyState, error: video?.error?.code,
+                    display: compStyle?.display, visibility: compStyle?.visibility, opacity: compStyle?.opacity
                 });
             } catch (error) { console.warn('Diagnostics unavailable', error); }
         }
@@ -379,7 +394,7 @@
 
         context.start({
             useShakaForHls: true,
-            versionCode: 2026092001,
+            versionCode: 2026092002,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
