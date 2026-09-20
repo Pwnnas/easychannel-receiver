@@ -305,6 +305,29 @@
             }
         }
 
+        playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
+            console.error('[EasyChannel IPTV Receiver] Player ERROR:', event);
+            const errDetail = event.detailedErrorCode || event.reason || 'Spelfel';
+            showOverlay(document.getElementById('channel-title').textContent, 'Fel: ' + errDetail, null, 15000);
+            try {
+                context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
+                    type: 'RECEIVER_ERROR',
+                    detailedErrorCode: event.detailedErrorCode,
+                    reason: event.reason
+                });
+            } catch (_) {}
+        });
+
+        window.addEventListener('error', (e) => {
+            console.error('[EasyChannel IPTV Receiver] Window error:', e);
+            try {
+                context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
+                    type: 'WINDOW_ERROR',
+                    message: e.message
+                });
+            } catch (_) {}
+        });
+
         context.addCustomMessageListener(CUSTOM_CHANNEL, handleCustomMessage);
         context.addCustomMessageListener(LEGACY_CHANNEL, handleCustomMessage);
 
