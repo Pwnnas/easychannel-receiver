@@ -201,9 +201,9 @@
             window.__ecFixTried = false;
             window.__ecFixApplied = false;
             diagnosticTimers.forEach(clearTimeout);
-            // First sample is pre-fix; the experiment is applied just after it.
-            diagnosticTimers = [5000, 15000, 30000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
-            diagnosticTimers.push(setTimeout(applyHostSizeExperiment, 6500));
+            // Samples 5-15s are pre-fix while playing; the host-size experiment runs at 17s.
+            diagnosticTimers = [5000, 10000, 15000, 20000, 25000, 30000, 45000, 60000].map(ms => setTimeout(sendDiagnostics, ms));
+            diagnosticTimers.push(setTimeout(applyHostSizeExperiment, 17000));
             showOverlay(title, 'Laddar ström...', logo, 8000);
             return loadRequestData;
         });
