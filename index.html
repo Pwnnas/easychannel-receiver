@@ -90,6 +90,17 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
 
+        // Overlay text follows the sender's app language (sent in customData.language).
+        const OVERLAY_TEXT = {
+            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel' },
+            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error' }
+        };
+        let currentLanguage = 'sv';
+        function tr(key) {
+            const table = OVERLAY_TEXT[currentLanguage] || OVERLAY_TEXT.sv;
+            return table[key] || OVERLAY_TEXT.sv[key] || key;
+        }
+
         let hideOverlayTimer = null;
         function showOverlay(title, status, logoUrl, durationMs = 6000) {
             const overlay = document.getElementById('channel-overlay');
@@ -256,8 +267,8 @@
                 const audio = playerManager.getAudioTracksManager().getActiveTrack();
                 const audioLabel = audio ? (audio.name || audio.language || 'Standard') : 'Standard';
                 const text = (playerManager.getTextTracksManager().getActiveTracks() || [])[0];
-                const textLabel = text ? (text.name || text.language || 'Text') : 'Av';
-                return 'Ljud: ' + audioLabel + ' · Text: ' + textLabel;
+                const textLabel = text ? (text.name || text.language || tr('text')) : tr('off');
+                return tr('audio') + ': ' + audioLabel + ' · ' + tr('text') + ': ' + textLabel;
             } catch (error) {
                 return '';
             }
@@ -298,8 +309,9 @@
             preferredAudioName = customData?.preferredAudioName || '';
             preferredSubtitle = customData?.preferredSubtitle || '';
             preferredSubtitleName = customData?.preferredSubtitleName || '';
+            currentLanguage = customData?.language === 'en' ? 'en' : 'sv';
 
-            showOverlay(title, 'Laddar ström...', logo, 8000);
+            showOverlay(title, tr('loading'), logo, 8000);
             return loadRequestData;
         });
 
@@ -333,7 +345,7 @@
                         console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', audioMatch.trackId, audioMatch.language);
                         audioManager.setActiveById(audioMatch.trackId);
                         showOverlay(document.getElementById('channel-title').textContent,
-                            currentIsVod ? currentTrackSummary() : ('Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId)), null, 4000);
+                            currentIsVod ? currentTrackSummary() : (tr('audio') + ': ' + (audioMatch.name || audioMatch.language || audioMatch.trackId)), null, 4000);
                         broadcastTrackList();
                         const textIds = currentIsVod ? request.activeTrackIds.filter(id =>
                             mediaTracks.some(mt => mt.trackId === id && mt.type === cast.framework.messages.TrackType.TEXT)) : [];
@@ -380,7 +392,7 @@
             const currentActive = audioManager.getActiveTrack();
             const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Standard') : 'Standard';
             showOverlay(document.getElementById('channel-title').textContent,
-                'Spelar • ' + (currentIsVod ? currentTrackSummary() : langLabel), null, 5000);
+                tr('playing') + ' • ' + (currentIsVod ? currentTrackSummary() : langLabel), null, 5000);
 
             // Send full track list back to Android sender app
             setTimeout(() => { enforceVodTextSelection(true); broadcastTrackList(true); }, 500);
@@ -422,7 +434,7 @@
                 if (match) {
                     console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', match.trackId, match.language, match.name);
                     audioManager.setActiveById(match.trackId);
-                    showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (match.name || match.language || match.trackId), null, 4000);
+                    showOverlay(document.getElementById('channel-title').textContent, tr('audio') + ': ' + (match.name || match.language || match.trackId), null, 4000);
                     broadcastTrackList();
                 }
             } else if (data.type === 'SELECT_LANGUAGE') {
@@ -459,7 +471,7 @@
                 triggeredByEventType: event.triggeredByEventType
             });
             const errDetail = event.detailedErrorCode || event.reason || 'okänt';
-            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', 'Fel: ' + errDetail, null, 0);
+            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', tr('error') + ': ' + errDetail, null, 0);
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
@@ -483,6 +495,8 @@
         context.addCustomMessageListener(CUSTOM_CHANNEL, handleCustomMessage);
         context.addCustomMessageListener(LEGACY_CHANNEL, handleCustomMessage);
 
+        document.getElementById('channel-status').textContent = tr('connected');
+
         // Playback configuration for IPTV HLS / TS live streams.
         // NOTE: do NOT enable useShakaForHls. Shaka's HLS parser cannot switch
         // muxed multi-audio tracks (Swedish/English/Finnish etc.), so the TV
@@ -493,7 +507,7 @@
 
 
         context.start({
-            versionCode: 2026092405,
+            versionCode: 2026092406,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
