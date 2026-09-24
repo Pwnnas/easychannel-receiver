@@ -114,22 +114,36 @@
             }
         }
 
-        function broadcastTrackList() {
+        let lastTrackSignature = '';
+        function broadcastTrackList(force = false) {
             try {
                 const audioManager = playerManager.getAudioTracksManager();
-                const tracks = audioManager.getTracks() || [];
-                const active = audioManager.getActiveTrack();
+                const textManager = playerManager.getTextTracksManager();
+                const audioTracks = audioManager.getTracks() || [];
+                const textTracks = textManager.getTracks() || [];
+                const activeAudio = audioManager.getActiveTrack();
+                const activeTextIds = new Set((textManager.getActiveTracks() || []).map(t => t.trackId));
 
                 const payload = {
                     type: 'TRACKS_UPDATE',
-                    tracks: tracks.map(t => ({
+                    tracks: [...audioTracks.map(t => ({
                         id: t.trackId,
                         language: t.language || '',
                         name: t.name || t.language || `Spår ${t.trackId}`,
-                        isSelected: active ? (t.trackId === active.trackId) : false
-                    }))
+                        type: 'AUDIO',
+                        isSelected: activeAudio ? (t.trackId === activeAudio.trackId) : false
+                    })), ...textTracks.map(t => ({
+                        id: t.trackId,
+                        language: t.language || '',
+                        name: t.name || t.language || `Text ${t.trackId}`,
+                        type: 'TEXT',
+                        isSelected: activeTextIds.has(t.trackId)
+                    }))]
                 };
 
+                const signature = JSON.stringify(payload.tracks);
+                if (!force && signature === lastTrackSignature) return;
+                lastTrackSignature = signature;
                 console.log('[EasyChannel IPTV Receiver] Broadcasting tracks:', payload);
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, payload);
                 context.sendCustomMessage(LEGACY_CHANNEL, undefined, payload);
@@ -184,6 +198,7 @@
             const customData = loadRequestData.customData || media?.customData;
             const isVod = customData?.vod === true;
             currentIsVod = isVod;
+            lastTrackSignature = '';
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -277,7 +292,7 @@
             showOverlay(document.getElementById('channel-title').textContent, 'Spelar • ' + langLabel, null, 5000);
 
             // Send full track list back to Android sender app
-            setTimeout(broadcastTrackList, 500);
+            setTimeout(() => broadcastTrackList(true), 500);
         });
 
         // Custom Message Channel for direct sender commands
@@ -285,7 +300,15 @@
             const data = event.data;
             console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
 
-            if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
+            if (data.type === 'SELECT_TEXT_TRACK') {
+                const manager = playerManager.getTextTracksManager();
+                manager.setActiveByIds(data.trackId == null ? [] : [Number(data.trackId)]);
+                broadcastTrackList(true);
+            } else if (data.type === 'SELECT_AUDIO_TRACK') {
+                const manager = playerManager.getAudioTracksManager();
+                manager.setActiveById(Number(data.trackId));
+                broadcastTrackList(true);
+            } else if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
                 const audioManager = playerManager.getAudioTracksManager();
                 const tracks = audioManager.getTracks() || [];
                 let match = null;
@@ -322,9 +345,12 @@
                 }
                 broadcastTrackList();
             } else if (data.type === 'QUERY_TRACKS') {
-                broadcastTrackList();
+                broadcastTrackList(true);
             }
         }
+
+        // Some VOD containers publish tracks after the initial load callback.
+        setInterval(() => { if (currentIsVod) broadcastTrackList(); }, 2000);
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             console.error('[EasyChannel IPTV Receiver] PLAYBACK ERROR', {
@@ -369,7 +395,7 @@
 
 
         context.start({
-            versionCode: 2026092401,
+            versionCode: 2026092402,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
