@@ -175,27 +175,31 @@
         }
 
         let preferredLanguage = '';
+        let currentIsVod = false;
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
             console.log('[EasyChannel IPTV Receiver] LOAD RECEIVED', JSON.stringify(loadRequestData));
             const media = loadRequestData.media;
+            const customData = loadRequestData.customData || media?.customData;
+            const isVod = customData?.vod === true;
+            currentIsVod = isVod;
             if (media) {
-                if (media.contentUrl && media.contentUrl.endsWith('.ts')) {
+                if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
                     media.contentType = 'application/x-mpegurl';
                 }
-                if (media.contentId && media.contentId.endsWith('.ts')) {
+                if (!isVod && media.contentId && media.contentId.endsWith('.ts')) {
                     media.contentId = media.contentId.replace(/\.ts$/, '.m3u8');
                     media.contentType = 'application/x-mpegurl';
                 }
-                media.streamType = cast.framework.messages.StreamType.LIVE;
+                media.streamType = isVod ? cast.framework.messages.StreamType.BUFFERED
+                    : cast.framework.messages.StreamType.LIVE;
             }
 
             const metadata = media?.metadata;
             const title = metadata?.title || 'EasyChannel IPTV';
             const logo = metadata?.images?.[0]?.url;
-            const customData = loadRequestData.customData || media?.customData;
             if (customData && customData.preferredAudio) {
                 preferredLanguage = customData.preferredAudio;
             } else {
@@ -230,7 +234,9 @@
                         audioManager.setActiveById(audioMatch.trackId);
                         showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
                         broadcastTrackList();
-                        request.activeTrackIds = [audioMatch.trackId];
+                        const textIds = currentIsVod ? request.activeTrackIds.filter(id =>
+                            mediaTracks.some(mt => mt.trackId === id && mt.type === cast.framework.messages.TrackType.TEXT)) : [];
+                        request.activeTrackIds = [audioMatch.trackId, ...textIds];
                         break;
                     }
                 }
@@ -363,7 +369,7 @@
 
 
         context.start({
-            versionCode: 2026092003,
+            versionCode: 2026092401,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
