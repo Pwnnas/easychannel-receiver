@@ -193,8 +193,10 @@
         let audioPreferenceApplied = false;
         let preferredSubtitle = '';
         let preferredSubtitleName = '';
-        let subtitlePreferenceApplied = false;
         let currentIsVod = false;
+        // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
+        let vodDesiredTextIds = undefined;
+        let vodTextAppliedAt = 0;
         function applyVodAudioPreference() {
             if (!currentIsVod || audioPreferenceApplied || !preferredLanguage) return;
             try {
@@ -212,28 +214,52 @@
                 console.warn('[EasyChannel IPTV Receiver] Audio preference pending:', error);
             }
         }
-        function applyVodSubtitlePreference() {
-            if (!currentIsVod || subtitlePreferenceApplied) return;
+        // Resolve the sender's saved subtitle choice against the tracks CAF has published.
+        // Returns undefined while the track list is still empty so the caller can wait.
+        function resolveVodTextIds() {
+            const manager = playerManager.getTextTracksManager();
+            const tracks = manager.getTracks() || [];
+            if (preferredSubtitle === 'off' || (!preferredSubtitle && !preferredSubtitleName)) return [];
+            const match = tracks.find(t => matchLang(t.language, preferredSubtitle) &&
+                (!preferredSubtitleName || t.name === preferredSubtitleName))
+                || tracks.find(t => matchLang(t.language, preferredSubtitle))
+                || (preferredSubtitleName && tracks.find(t => t.name === preferredSubtitleName));
+            return match ? [match.trackId] : undefined;
+        }
+        // Keep exactly one VOD subtitle track active. Cast can drop or duplicate the text track
+        // after a seek or pause, so the user's choice is re-asserted instead of trusting CAF.
+        function enforceVodTextSelection(force = false) {
+            if (!currentIsVod) return;
             try {
                 const manager = playerManager.getTextTracksManager();
-                if (preferredSubtitle === 'off') {
-                    if ((manager.getTracks() || []).length === 0) return;
-                    manager.setActiveByIds([]);
-                    subtitlePreferenceApplied = true;
-                    return;
+                if (vodDesiredTextIds === undefined) {
+                    const resolved = resolveVodTextIds();
+                    if (resolved === undefined) return;
+                    vodDesiredTextIds = resolved;
                 }
-                if (!preferredSubtitle) return;
-                const tracks = manager.getTracks() || [];
-                const match = tracks.find(t => matchLang(t.language, preferredSubtitle) &&
-                    (!preferredSubtitleName || t.name === preferredSubtitleName))
-                    || tracks.find(t => matchLang(t.language, preferredSubtitle))
-                    || (preferredSubtitleName && tracks.find(t => t.name === preferredSubtitleName));
-                if (match) {
-                    manager.setActiveByIds([match.trackId]);
-                    subtitlePreferenceApplied = true;
+                const active = (manager.getActiveTracks() || []).map(t => t.trackId);
+                const desired = vodDesiredTextIds;
+                const same = active.length === desired.length && desired.every(id => active.includes(id));
+                // Re-assert a dropped/duplicated selection, but throttle repeats so a lagging
+                // active-track report cannot reload the subtitle stream every tick.
+                if (force || (!same && Date.now() - vodTextAppliedAt > 4000)) {
+                    manager.setActiveByIds(desired);
+                    vodTextAppliedAt = Date.now();
                 }
             } catch (error) {
                 console.warn('[EasyChannel IPTV Receiver] Subtitle preference pending:', error);
+            }
+        }
+        // Overlay line that names the audio and subtitle currently playing on the TV.
+        function currentTrackSummary() {
+            try {
+                const audio = playerManager.getAudioTracksManager().getActiveTrack();
+                const audioLabel = audio ? (audio.name || audio.language || 'Standard') : 'Standard';
+                const text = (playerManager.getTextTracksManager().getActiveTracks() || [])[0];
+                const textLabel = text ? (text.name || text.language || 'Text') : 'Av';
+                return 'Ljud: ' + audioLabel + ' · Text: ' + textLabel;
+            } catch (error) {
+                return '';
             }
         }
 
@@ -246,7 +272,8 @@
             currentIsVod = isVod;
             lastTrackSignature = '';
             audioPreferenceApplied = false;
-            subtitlePreferenceApplied = false;
+            vodDesiredTextIds = undefined;
+            vodTextAppliedAt = 0;
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -279,6 +306,13 @@
         // Intercept EDIT_TRACKS_INFO to allow sender to switch audio tracks via standard Cast API
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.EDIT_TRACKS_INFO, request => {
             console.log('[EasyChannel IPTV Receiver] EDIT_TRACKS_INFO received:', request);
+            // The sender switches VOD subtitles through the standard Cast API, so remember the
+            // requested text tracks here and keep enforcing exactly that selection afterwards.
+            if (currentIsVod && Array.isArray(request.activeTrackIds)) {
+                const knownTracks = playerManager.getMediaInformation()?.tracks || [];
+                vodDesiredTextIds = request.activeTrackIds.filter(id =>
+                    knownTracks.some(mt => mt.trackId === id && mt.type === cast.framework.messages.TrackType.TEXT));
+            }
             if (request.activeTrackIds && request.activeTrackIds.length > 0) {
                 const audioManager = playerManager.getAudioTracksManager();
                 const tracks = audioManager.getTracks() || [];
@@ -298,7 +332,8 @@
                     if (audioMatch) {
                         console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', audioMatch.trackId, audioMatch.language);
                         audioManager.setActiveById(audioMatch.trackId);
-                        showOverlay(document.getElementById('channel-title').textContent, 'Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
+                        showOverlay(document.getElementById('channel-title').textContent,
+                            currentIsVod ? currentTrackSummary() : ('Ljud: ' + (audioMatch.name || audioMatch.language || audioMatch.trackId)), null, 4000);
                         broadcastTrackList();
                         const textIds = currentIsVod ? request.activeTrackIds.filter(id =>
                             mediaTracks.some(mt => mt.trackId === id && mt.type === cast.framework.messages.TrackType.TEXT)) : [];
@@ -344,10 +379,11 @@
 
             const currentActive = audioManager.getActiveTrack();
             const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Standard') : 'Standard';
-            showOverlay(document.getElementById('channel-title').textContent, 'Spelar • ' + langLabel, null, 5000);
+            showOverlay(document.getElementById('channel-title').textContent,
+                'Spelar • ' + (currentIsVod ? currentTrackSummary() : langLabel), null, 5000);
 
             // Send full track list back to Android sender app
-            setTimeout(() => { applyVodSubtitlePreference(); broadcastTrackList(true); }, 500);
+            setTimeout(() => { enforceVodTextSelection(true); broadcastTrackList(true); }, 500);
         });
 
         // Custom Message Channel for direct sender commands
@@ -357,14 +393,16 @@
 
             if (data.type === 'SELECT_TEXT_TRACK') {
                 const manager = playerManager.getTextTracksManager();
-                manager.setActiveByIds(data.trackId == null ? [] : [Number(data.trackId)]);
-                subtitlePreferenceApplied = true;
+                vodDesiredTextIds = data.trackId == null ? [] : [Number(data.trackId)];
+                manager.setActiveByIds(vodDesiredTextIds);
                 broadcastTrackList(true);
+                showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
             } else if (data.type === 'SELECT_AUDIO_TRACK') {
                 const manager = playerManager.getAudioTracksManager();
                 manager.setActiveById(Number(data.trackId));
                 audioPreferenceApplied = true;
                 broadcastTrackList(true);
+                showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
             } else if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
                 const audioManager = playerManager.getAudioTracksManager();
                 const tracks = audioManager.getTracks() || [];
@@ -406,10 +444,11 @@
             }
         }
 
-        // Some VOD containers publish tracks after the initial load callback.
+        // Some VOD containers publish tracks after the initial load callback. Re-assert the
+        // chosen audio/subtitle tracks so a seek or pause cannot silently drop or duplicate them.
         setInterval(() => {
-            if (currentIsVod) { applyVodAudioPreference(); applyVodSubtitlePreference(); broadcastTrackList(); }
-        }, 2000);
+            if (currentIsVod) { applyVodAudioPreference(); enforceVodTextSelection(); broadcastTrackList(); }
+        }, 1000);
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             console.error('[EasyChannel IPTV Receiver] PLAYBACK ERROR', {
@@ -454,7 +493,7 @@
 
 
         context.start({
-            versionCode: 2026092404,
+            versionCode: 2026092405,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
