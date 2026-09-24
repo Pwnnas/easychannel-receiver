@@ -273,6 +273,19 @@
                 return '';
             }
         }
+        // setActiveByIds updates the active-track list asynchronously, so the overlay must wait
+        // until Cast reports the requested subtitle selection (otherwise it shows the old/off track).
+        function refreshTrackOverlay(attempt = 0) {
+            if (!currentIsVod) return;
+            const desired = vodDesiredTextIds;
+            const active = (playerManager.getTextTracksManager().getActiveTracks() || []).map(t => t.trackId);
+            const settled = Array.isArray(desired) && active.length === desired.length && desired.every(id => active.includes(id));
+            if (!settled && attempt < 10) {
+                setTimeout(() => refreshTrackOverlay(attempt + 1), 200);
+                return;
+            }
+            showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
+        }
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
@@ -344,8 +357,12 @@
                     if (audioMatch) {
                         console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', audioMatch.trackId, audioMatch.language);
                         audioManager.setActiveById(audioMatch.trackId);
-                        showOverlay(document.getElementById('channel-title').textContent,
-                            currentIsVod ? currentTrackSummary() : (tr('audio') + ': ' + (audioMatch.name || audioMatch.language || audioMatch.trackId)), null, 4000);
+                        if (currentIsVod) {
+                            refreshTrackOverlay();
+                        } else {
+                            showOverlay(document.getElementById('channel-title').textContent,
+                                tr('audio') + ': ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
+                        }
                         broadcastTrackList();
                         const textIds = currentIsVod ? request.activeTrackIds.filter(id =>
                             mediaTracks.some(mt => mt.trackId === id && mt.type === cast.framework.messages.TrackType.TEXT)) : [];
@@ -391,11 +408,12 @@
 
             const currentActive = audioManager.getActiveTrack();
             const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Standard') : 'Standard';
-            showOverlay(document.getElementById('channel-title').textContent,
-                tr('playing') + ' • ' + (currentIsVod ? currentTrackSummary() : langLabel), null, 5000);
+            if (!currentIsVod) {
+                showOverlay(document.getElementById('channel-title').textContent, tr('playing') + ' • ' + langLabel, null, 5000);
+            }
 
             // Send full track list back to Android sender app
-            setTimeout(() => { enforceVodTextSelection(true); broadcastTrackList(true); }, 500);
+            setTimeout(() => { enforceVodTextSelection(true); broadcastTrackList(true); if (currentIsVod) refreshTrackOverlay(); }, 500);
         });
 
         // Custom Message Channel for direct sender commands
@@ -408,13 +426,13 @@
                 vodDesiredTextIds = data.trackId == null ? [] : [Number(data.trackId)];
                 manager.setActiveByIds(vodDesiredTextIds);
                 broadcastTrackList(true);
-                showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
+                refreshTrackOverlay();
             } else if (data.type === 'SELECT_AUDIO_TRACK') {
                 const manager = playerManager.getAudioTracksManager();
                 manager.setActiveById(Number(data.trackId));
                 audioPreferenceApplied = true;
                 broadcastTrackList(true);
-                showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
+                refreshTrackOverlay();
             } else if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
                 const audioManager = playerManager.getAudioTracksManager();
                 const tracks = audioManager.getTracks() || [];
@@ -507,7 +525,7 @@
 
 
         context.start({
-            versionCode: 2026092406,
+            versionCode: 2026092407,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
