@@ -189,7 +189,33 @@
         }
 
         let preferredLanguage = '';
+        let preferredAudioName = '';
+        let preferredSubtitle = '';
+        let preferredSubtitleName = '';
+        let subtitlePreferenceApplied = false;
         let currentIsVod = false;
+        function applyVodSubtitlePreference() {
+            if (!currentIsVod || subtitlePreferenceApplied) return;
+            try {
+                const manager = playerManager.getTextTracksManager();
+                if (preferredSubtitle === 'off') {
+                    manager.setActiveByIds([]);
+                    subtitlePreferenceApplied = true;
+                    return;
+                }
+                if (!preferredSubtitle) return;
+                const tracks = manager.getTracks() || [];
+                const match = tracks.find(t => matchLang(t.language, preferredSubtitle) &&
+                    (!preferredSubtitleName || t.name === preferredSubtitleName))
+                    || tracks.find(t => matchLang(t.language, preferredSubtitle));
+                if (match) {
+                    manager.setActiveByIds([match.trackId]);
+                    subtitlePreferenceApplied = true;
+                }
+            } catch (error) {
+                console.warn('[EasyChannel IPTV Receiver] Subtitle preference pending:', error);
+            }
+        }
 
         // Intercept LOAD request to read metadata and preferred audio
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.LOAD, loadRequestData => {
@@ -199,6 +225,7 @@
             const isVod = customData?.vod === true;
             currentIsVod = isVod;
             lastTrackSignature = '';
+            subtitlePreferenceApplied = false;
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -220,6 +247,9 @@
             } else {
                 preferredLanguage = '';
             }
+            preferredAudioName = customData?.preferredAudioName || '';
+            preferredSubtitle = customData?.preferredSubtitle || '';
+            preferredSubtitleName = customData?.preferredSubtitleName || '';
 
             showOverlay(title, 'Laddar ström...', logo, 8000);
             return loadRequestData;
@@ -268,7 +298,9 @@
 
             if (preferredLanguage) {
                 const normTarget = normalizeLang(preferredLanguage);
-                let matchedTrack = tracks.find(t => matchLang(t.language, preferredLanguage));
+                let matchedTrack = tracks.find(t => matchLang(t.language, preferredLanguage) &&
+                    (!preferredAudioName || t.name === preferredAudioName))
+                    || tracks.find(t => matchLang(t.language, preferredLanguage));
                 if (!matchedTrack) {
                     matchedTrack = tracks.find(t => {
                         const name = (t.name || '').toLowerCase();
@@ -292,7 +324,7 @@
             showOverlay(document.getElementById('channel-title').textContent, 'Spelar • ' + langLabel, null, 5000);
 
             // Send full track list back to Android sender app
-            setTimeout(() => broadcastTrackList(true), 500);
+            setTimeout(() => { applyVodSubtitlePreference(); broadcastTrackList(true); }, 500);
         });
 
         // Custom Message Channel for direct sender commands
@@ -350,7 +382,7 @@
         }
 
         // Some VOD containers publish tracks after the initial load callback.
-        setInterval(() => { if (currentIsVod) broadcastTrackList(); }, 2000);
+        setInterval(() => { if (currentIsVod) { applyVodSubtitlePreference(); broadcastTrackList(); } }, 2000);
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             console.error('[EasyChannel IPTV Receiver] PLAYBACK ERROR', {
@@ -395,7 +427,7 @@
 
 
         context.start({
-            versionCode: 2026092402,
+            versionCode: 2026092403,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
