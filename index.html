@@ -92,8 +92,8 @@
 
         // Overlay text follows the sender's app language (sent in customData.language).
         const OVERLAY_TEXT = {
-            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel' },
-            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error' }
+            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel', unsupportedCodec: 'Videoformatet stöds inte av denna Chromecast' },
+            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error', unsupportedCodec: 'Video format is not supported by this Chromecast' }
         };
         let currentLanguage = 'sv';
         function tr(key) {
@@ -205,6 +205,7 @@
         let preferredSubtitle = '';
         let preferredSubtitleName = '';
         let currentIsVod = false;
+        let currentVodGateway = false;
         // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
@@ -323,6 +324,67 @@
             preferredSubtitle = customData?.preferredSubtitle || '';
             preferredSubtitleName = customData?.preferredSubtitleName || '';
             currentLanguage = customData?.language === 'en' ? 'en' : 'sv';
+            currentVodGateway = customData?.vodGateway === true;
+
+            // Validate video codec and resolution against hardware decoder capabilities
+            if (isVod && customData && (customData.vodGateway || customData.videoCodecs || customData.videoMime)) {
+                const videoMime = customData.videoMime || '';
+                let codecs = customData.videoCodecs || '';
+                let checkMime = 'video/mp4';
+                if (!codecs) {
+                    if (videoMime.includes('hevc') || videoMime.includes('h265')) {
+                        codecs = 'hev1.1.6.L93.B0';
+                    } else if (videoMime.includes('avc') || videoMime.includes('h264')) {
+                        codecs = 'avc1.4d401f';
+                    } else if (videoMime.includes('vp9')) {
+                        checkMime = 'video/webm';
+                        codecs = 'vp9';
+                    } else if (videoMime.includes('av01') || videoMime.includes('av1')) {
+                        codecs = 'av01.0.04M.10';
+                    }
+                }
+                const width = (customData.videoWidth && Number(customData.videoWidth) > 0) ? Number(customData.videoWidth) : undefined;
+                const height = (customData.videoHeight && Number(customData.videoHeight) > 0) ? Number(customData.videoHeight) : undefined;
+
+                if (typeof context.canDisplayType === 'function') {
+                    let supported = true;
+                    try {
+                        supported = context.canDisplayType(checkMime, codecs || undefined, width, height);
+                    } catch (e) {
+                        (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] canDisplayType check failed:', e);
+                        supported = true;
+                    }
+                    console.log('[EasyChannel IPTV Receiver] canDisplayType result:', {
+                        checkMime, codecs, width, height, supported
+                    });
+                    if (!supported) {
+                        (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Video format UNSUPPORTED on this device:', {
+                            checkMime, codecs, width, height
+                        });
+                        showOverlay(title, tr('unsupportedCodec'), logo, 8000);
+                        const errorPayload = {
+                            type: 'VOD_UNSUPPORTED_CODEC',
+                            contentId: media?.contentId || media?.contentUrl || '',
+                            mime: videoMime || checkMime,
+                            codecs: codecs,
+                            width: width,
+                            height: height
+                        };
+                        try {
+                            if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
+                            if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
+                        } catch (err) {
+                            (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send VOD_UNSUPPORTED_CODEC:', err);
+                        }
+                        const errorReason = (cast.framework.messages.ErrorReason && cast.framework.messages.ErrorReason.NOT_SUPPORTED) || 'NOT_SUPPORTED';
+                        const errorData = new cast.framework.messages.ErrorData(
+                            cast.framework.messages.ErrorType.LOAD_FAILED
+                        );
+                        errorData.reason = errorReason;
+                        return errorData;
+                    }
+                }
+            }
 
             showOverlay(title, tr('loading'), logo, 8000);
             return loadRequestData;
@@ -525,7 +587,7 @@
 
 
         context.start({
-            versionCode: 2026092407,
+            versionCode: 2026092801,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
