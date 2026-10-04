@@ -211,6 +211,12 @@
         // only if playback then fails, instead of refusing the LOAD up front.
         let vodCodecWarning = null;
         let vodCodecWarningTimer = null;
+        // Set once the codec message went out for this LOAD: the errors that follow it (905 and
+        // so on) must not replace the explanation on the phone.
+        let vodCodecReported = false;
+        // Media and load failures that a decoder unable to handle the format produces. Network and
+        // segment errors (3xx) are not blamed on the codec: the sender retries those.
+        const CODEC_ERROR_CODES = [100, 102, 104, 110, 905];
         // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
@@ -306,6 +312,8 @@
             vodTextAppliedAt = 0;
             vodCodecWarning = null;
             clearTimeout(vodCodecWarningTimer);
+            vodCodecWarningTimer = null;
+            vodCodecReported = false;
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -537,10 +545,10 @@
         }, 1000);
 
         // A format the device doubted has played for a while: later errors are not about the codec.
+        // Counted from the first PLAYING only; seeking or pausing must not keep the warning alive.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
-            if (!vodCodecWarning) return;
+            if (!vodCodecWarning || vodCodecWarningTimer) return;
             const warning = vodCodecWarning;
-            clearTimeout(vodCodecWarningTimer);
             vodCodecWarningTimer = setTimeout(() => {
                 if (vodCodecWarning === warning) vodCodecWarning = null;
             }, 15000);
@@ -556,11 +564,17 @@
             });
             const errDetail = event.detailedErrorCode || event.reason || 'okänt';
             const overlayTitle = document.getElementById('channel-title').textContent || 'EasyChannel IPTV';
-            if (currentIsVod && vodCodecWarning) {
+            if (currentIsVod && vodCodecReported) {
+                // Follow-up errors of a format failure already explained to the sender.
+                return;
+            }
+            if (currentIsVod && vodCodecWarning && CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))) {
                 // Playback failed on a format the device had doubted: tell the sender why.
                 const errorPayload = vodCodecWarning;
                 vodCodecWarning = null;
+                vodCodecReported = true;
                 clearTimeout(vodCodecWarningTimer);
+                vodCodecWarningTimer = null;
                 showOverlay(overlayTitle, tr('unsupportedCodec'), null, 8000);
                 try {
                     if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
@@ -568,9 +582,9 @@
                 } catch (err) {
                     (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send VOD_UNSUPPORTED_CODEC:', err);
                 }
-            } else {
-                showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
+                return;
             }
+            showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
@@ -606,7 +620,7 @@
 
 
         context.start({
-            versionCode: 2026100401,
+            versionCode: 2026100402,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
