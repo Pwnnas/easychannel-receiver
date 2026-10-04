@@ -206,6 +206,11 @@
         let preferredSubtitleName = '';
         let currentIsVod = false;
         let currentVodGateway = false;
+        // canDisplayType can answer "no" for a format the TV plays fine (some TVs with built-in
+        // Cast report only 1080p to Cast). The answer is kept here and reported to the sender
+        // only if playback then fails, instead of refusing the LOAD up front.
+        let vodCodecWarning = null;
+        let vodCodecWarningTimer = null;
         // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
@@ -299,6 +304,8 @@
             audioPreferenceApplied = false;
             vodDesiredTextIds = undefined;
             vodTextAppliedAt = 0;
+            vodCodecWarning = null;
+            clearTimeout(vodCodecWarningTimer);
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -358,11 +365,10 @@
                         checkMime, codecs, width, height, supported
                     });
                     if (!supported) {
-                        (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Video format UNSUPPORTED on this device:', {
+                        (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Device says the video format is unsupported; trying anyway:', {
                             checkMime, codecs, width, height
                         });
-                        showOverlay(title, tr('unsupportedCodec'), logo, 8000);
-                        const errorPayload = {
+                        vodCodecWarning = {
                             type: 'VOD_UNSUPPORTED_CODEC',
                             contentId: media?.contentId || media?.contentUrl || '',
                             mime: videoMime || checkMime,
@@ -370,18 +376,6 @@
                             width: width,
                             height: height
                         };
-                        try {
-                            if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
-                            if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
-                        } catch (err) {
-                            (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send VOD_UNSUPPORTED_CODEC:', err);
-                        }
-                        const errorReason = (cast.framework.messages.ErrorReason && cast.framework.messages.ErrorReason.NOT_SUPPORTED) || 'NOT_SUPPORTED';
-                        const errorData = new cast.framework.messages.ErrorData(
-                            cast.framework.messages.ErrorType.LOAD_FAILED
-                        );
-                        errorData.reason = errorReason;
-                        return errorData;
                     }
                 }
             }
@@ -542,6 +536,16 @@
             if (currentIsVod) { applyVodAudioPreference(); enforceVodTextSelection(); broadcastTrackList(); }
         }, 1000);
 
+        // A format the device doubted has played for a while: later errors are not about the codec.
+        playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
+            if (!vodCodecWarning) return;
+            const warning = vodCodecWarning;
+            clearTimeout(vodCodecWarningTimer);
+            vodCodecWarningTimer = setTimeout(() => {
+                if (vodCodecWarning === warning) vodCodecWarning = null;
+            }, 15000);
+        });
+
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             console.error('[EasyChannel IPTV Receiver] PLAYBACK ERROR', {
                 detailedErrorCode: event.detailedErrorCode,
@@ -551,7 +555,22 @@
                 triggeredByEventType: event.triggeredByEventType
             });
             const errDetail = event.detailedErrorCode || event.reason || 'okänt';
-            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', tr('error') + ': ' + errDetail, null, 0);
+            const overlayTitle = document.getElementById('channel-title').textContent || 'EasyChannel IPTV';
+            if (currentIsVod && vodCodecWarning) {
+                // Playback failed on a format the device had doubted: tell the sender why.
+                const errorPayload = vodCodecWarning;
+                vodCodecWarning = null;
+                clearTimeout(vodCodecWarningTimer);
+                showOverlay(overlayTitle, tr('unsupportedCodec'), null, 8000);
+                try {
+                    if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
+                    if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
+                } catch (err) {
+                    (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send VOD_UNSUPPORTED_CODEC:', err);
+                }
+            } else {
+                showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
+            }
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
@@ -587,7 +606,7 @@
 
 
         context.start({
-            versionCode: 2026092801,
+            versionCode: 2026100401,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
