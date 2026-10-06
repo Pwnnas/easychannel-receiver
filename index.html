@@ -610,6 +610,23 @@
 
         document.getElementById('channel-status').textContent = tr('connected');
 
+        // Handle remote control keys (e.g. Android TV / Google TV remote Back button)
+        window.addEventListener('keydown', (event) => {
+            const isBack = event.key === 'GoBack' || event.key === 'Back' || event.key === 'Escape' ||
+                           event.keyCode === 27 || event.keyCode === 4 || event.keyCode === 8 ||
+                           event.keyCode === 10009 || event.keyCode === 461;
+            if (isBack) {
+                console.log('[EasyChannel IPTV Receiver] Remote Back pressed -> stopping receiver');
+                event.preventDefault();
+                try {
+                    context.stop();
+                } catch (err) {
+                    console.warn('[EasyChannel IPTV Receiver] Failed to stop context:', err);
+                    window.close();
+                }
+            }
+        });
+
         // Playback configuration for IPTV HLS / TS live streams.
         // NOTE: do NOT enable useShakaForHls. Shaka's HLS parser cannot switch
         // muxed multi-audio tracks (Swedish/English/Finnish etc.), so the TV
@@ -620,7 +637,7 @@
 
 
         context.start({
-            versionCode: 2026100402,
+            versionCode: 2026100601,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
