@@ -214,6 +214,8 @@
         // Set once the codec message went out for this LOAD: the errors that follow it (905 and
         // so on) must not replace the explanation on the phone.
         let vodCodecReported = false;
+        // A live channel reached PLAYING since its LOAD: later errors are not about the codec.
+        let livePlayed = false;
         // Media and load failures that a decoder unable to handle the format produces. Network and
         // segment errors (3xx) are not blamed on the codec: the sender retries those.
         const CODEC_ERROR_CODES = [100, 102, 104, 110, 905];
@@ -314,6 +316,7 @@
             clearTimeout(vodCodecWarningTimer);
             vodCodecWarningTimer = null;
             vodCodecReported = false;
+            livePlayed = false;
             if (media) {
                 if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
                     media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
@@ -340,6 +343,33 @@
             preferredSubtitleName = customData?.preferredSubtitleName || '';
             currentLanguage = customData?.language === 'en' ? 'en' : 'sv';
             currentVodGateway = customData?.vodGateway === true;
+
+            // Live: the sender names the channel's video codec from its playlist. A device that says
+            // no is not trusted up front (see vodCodecWarning); the warning explains a failure that
+            // happens before the channel ever plays.
+            if (!isVod && customData && customData.videoCodecs && typeof context.canDisplayType === 'function') {
+                const codecs = String(customData.videoCodecs);
+                const width = Number(customData.videoWidth) > 0 ? Number(customData.videoWidth) : undefined;
+                const height = Number(customData.videoHeight) > 0 ? Number(customData.videoHeight) : undefined;
+                const frameRate = Number(customData.videoFrameRate) > 0 ? Number(customData.videoFrameRate) : undefined;
+                let supported = true;
+                try {
+                    supported = context.canDisplayType('video/mp4', codecs, width, height, frameRate);
+                } catch (e) {
+                    (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] canDisplayType check failed:', e);
+                }
+                console.log('[EasyChannel IPTV Receiver] live canDisplayType result:', { codecs, width, height, frameRate, supported });
+                if (!supported) {
+                    vodCodecWarning = {
+                        type: 'LIVE_UNSUPPORTED_CODEC',
+                        contentId: media?.contentId || media?.contentUrl || '',
+                        codecs: codecs,
+                        width: width,
+                        height: height,
+                        frameRate: frameRate
+                    };
+                }
+            }
 
             // Validate video codec and resolution against hardware decoder capabilities
             if (isVod && customData && (customData.vodGateway || customData.videoCodecs || customData.videoMime)) {
@@ -547,6 +577,7 @@
         // A format the device doubted has played for a while: later errors are not about the codec.
         // Counted from the first PLAYING only; seeking or pausing must not keep the warning alive.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
+            if (!currentIsVod) livePlayed = true;
             if (!vodCodecWarning || vodCodecWarningTimer) return;
             const warning = vodCodecWarning;
             vodCodecWarningTimer = setTimeout(() => {
@@ -564,11 +595,15 @@
             });
             const errDetail = event.detailedErrorCode || event.reason || 'okänt';
             const overlayTitle = document.getElementById('channel-title').textContent || 'EasyChannel IPTV';
-            if (currentIsVod && vodCodecReported) {
+            if (vodCodecReported) {
                 // Follow-up errors of a format failure already explained to the sender.
                 return;
             }
-            if (currentIsVod && vodCodecWarning && CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))) {
+            // Live decode failures show up as segment errors (310, 410) as well, so for live any error
+            // before the first PLAYING counts once the device has doubted the format.
+            const codecFailure = currentIsVod ? CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))
+                : !livePlayed;
+            if (vodCodecWarning && codecFailure) {
                 // Playback failed on a format the device had doubted: tell the sender why.
                 const errorPayload = vodCodecWarning;
                 vodCodecWarning = null;
@@ -580,7 +615,7 @@
                     if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
                     if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
                 } catch (err) {
-                    (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send VOD_UNSUPPORTED_CODEC:', err);
+                    (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send ' + errorPayload.type + ':', err);
                 }
                 return;
             }
@@ -637,7 +672,7 @@
 
 
         context.start({
-            versionCode: 2026100601,
+            versionCode: 2026101001,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
