@@ -102,7 +102,10 @@
         }
 
         let hideOverlayTimer = null;
+        // An error overlay stays up until playback resumes: a live stream often recovers by itself.
+        let errorOverlayShown = false;
         function showOverlay(title, status, logoUrl, durationMs = 6000) {
+            errorOverlayShown = false;
             const overlay = document.getElementById('channel-overlay');
             const titleEl = document.getElementById('channel-title');
             const statusEl = document.getElementById('channel-status');
@@ -219,6 +222,14 @@
         // Media and load failures that a decoder unable to handle the format produces. Network and
         // segment errors (3xx) are not blamed on the codec: the sender retries those.
         const CODEC_ERROR_CODES = [100, 102, 104, 110, 905];
+        // true/false from the device itself, undefined when it cannot be asked. Asked at 1080p
+        // (level 4.1): a 1080p-only HEVC device would answer "no" for 4K and be blamed for the codec.
+        function canDecodeHevc() {
+            try {
+                return typeof context.canDisplayType === 'function'
+                    ? Boolean(context.canDisplayType('video/mp4', 'hev1.1.6.L123.B0', 1920, 1080)) : undefined;
+            } catch (_) { return undefined; }
+        }
         // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
@@ -578,6 +589,10 @@
         // Counted from the first PLAYING only; seeking or pausing must not keep the warning alive.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
             if (!currentIsVod) livePlayed = true;
+            if (errorOverlayShown) {
+                errorOverlayShown = false;
+                document.getElementById('channel-overlay').classList.remove('visible');
+            }
             if (!vodCodecWarning || vodCodecWarningTimer) return;
             const warning = vodCodecWarning;
             vodCodecWarningTimer = setTimeout(() => {
@@ -620,12 +635,15 @@
                 return;
             }
             showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
+            errorOverlayShown = true;
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
                     detailedErrorCode: event.detailedErrorCode,
                     reason: event.reason,
-                    severity: event.severity
+                    severity: event.severity,
+                    // Lets the sender tell an older Chromecast (no HEVC, no 4K) from a newer one.
+                    hevc: canDecodeHevc()
                 });
             } catch (_) {}
         });
@@ -672,7 +690,7 @@
 
 
         context.start({
-            versionCode: 2026101001,
+            versionCode: 2026101301,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
