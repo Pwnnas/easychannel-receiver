@@ -634,8 +634,14 @@
                 }
                 return;
             }
-            showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
-            errorOverlayShown = true;
+            // A recoverable error (a late live segment, severity ERROR) comes while the channel keeps
+            // playing and would leave the box up for good; only a critical error stops playback.
+            const severities = cast.framework.events.ErrorSeverity || {};
+            const critical = severities.CRITICAL !== undefined ? severities.CRITICAL : 2;
+            if (event.severity === undefined || event.severity === critical) {
+                showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
+                errorOverlayShown = true;
+            }
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'RECEIVER_ERROR',
@@ -690,7 +696,7 @@
 
 
         context.start({
-            versionCode: 2026101301,
+            versionCode: 2026101302,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
