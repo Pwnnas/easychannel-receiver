@@ -573,6 +573,22 @@
             const data = event.data;
             console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
 
+            if (data.type === 'GET_CAPABILITIES') {
+                // Audio the TV's player takes through HLS/DASH (MSE). A Chromecast with Google TV
+                // answers no for E-AC-3 and plays it silently even as a plain MP4, so the sender
+                // converts that audio for this device instead of sending it as it is.
+                const supported = (codec) => {
+                    try {
+                        return typeof MediaSource !== 'undefined' &&
+                            MediaSource.isTypeSupported('audio/mp4; codecs="' + codec + '"');
+                    } catch (_) { return false; }
+                };
+                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3') };
+                console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
+                try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
+                catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
+                return;
+            }
             if (data.type === 'SELECT_TEXT_TRACK') {
                 const manager = playerManager.getTextTracksManager();
                 vodDesiredTextIds = data.trackId == null ? [] : [Number(data.trackId)];
@@ -731,7 +747,7 @@
 
 
         context.start({
-            versionCode: 2026101305,
+            versionCode: 2026101306,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
