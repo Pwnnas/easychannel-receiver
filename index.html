@@ -219,6 +219,47 @@
         let vodCodecReported = false;
         // A live channel reached PLAYING since its LOAD: later errors are not about the codec.
         let livePlayed = false;
+        // An older Chromecast given a format it cannot show (1080i) may buffer for good instead of
+        // failing. A doubted live format that has not started moving by then counts as a failure.
+        const DOUBTED_STALL_MS = 20000;
+        let doubtedWatch = null;
+        function stopDoubtedWatch() {
+            if (doubtedWatch) clearInterval(doubtedWatch);
+            doubtedWatch = null;
+        }
+        // Playback failed on a format the device had doubted: say so on the TV and tell the sender.
+        // The box stays until the next LOAD, or until the video plays after all.
+        function reportCodecFailure() {
+            const errorPayload = vodCodecWarning;
+            vodCodecWarning = null;
+            vodCodecReported = true;
+            clearTimeout(vodCodecWarningTimer);
+            vodCodecWarningTimer = null;
+            stopDoubtedWatch();
+            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', tr('unsupportedCodec'), null, 0);
+            errorOverlayShown = true;
+            try {
+                if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
+                if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
+            } catch (err) {
+                (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send ' + errorPayload.type + ':', err);
+            }
+        }
+        function watchDoubtedStart() {
+            stopDoubtedWatch();
+            const started = Date.now();
+            let firstTime = null;
+            doubtedWatch = setInterval(() => {
+                if (vodCodecReported || !vodCodecWarning || currentIsVod) { stopDoubtedWatch(); return; }
+                const time = playerManager.getCurrentTimeSec();
+                if (firstTime === null && time > 0) firstTime = time;
+                if (firstTime !== null && time - firstTime > 2) { stopDoubtedWatch(); return; }
+                if (Date.now() - started >= DOUBTED_STALL_MS) {
+                    console.log('[EasyChannel IPTV Receiver] doubted live format did not start:', vodCodecWarning);
+                    reportCodecFailure();
+                }
+            }, 1000);
+        }
         // Media and load failures that a decoder unable to handle the format produces. Network and
         // segment errors (3xx) are not blamed on the codec: the sender retries those.
         const CODEC_ERROR_CODES = [100, 102, 104, 110, 905];
@@ -385,6 +426,7 @@
                     };
                 }
             }
+            if (!isVod && vodCodecWarning) watchDoubtedStart(); else stopDoubtedWatch();
 
             // Validate video codec and resolution against hardware decoder capabilities
             if (isVod && customData && (customData.vodGateway || customData.videoCodecs || customData.videoMime)) {
@@ -623,19 +665,7 @@
             const codecFailure = currentIsVod ? CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))
                 : !livePlayed;
             if (vodCodecWarning && codecFailure) {
-                // Playback failed on a format the device had doubted: tell the sender why.
-                const errorPayload = vodCodecWarning;
-                vodCodecWarning = null;
-                vodCodecReported = true;
-                clearTimeout(vodCodecWarningTimer);
-                vodCodecWarningTimer = null;
-                showOverlay(overlayTitle, tr('unsupportedCodec'), null, 8000);
-                try {
-                    if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
-                    if (typeof LEGACY_CHANNEL !== 'undefined') context.sendCustomMessage(LEGACY_CHANNEL, undefined, errorPayload);
-                } catch (err) {
-                    (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send ' + errorPayload.type + ':', err);
-                }
+                reportCodecFailure();
                 return;
             }
             // A recoverable error (a late live segment, severity ERROR) comes while the channel keeps
@@ -700,7 +730,7 @@
 
 
         context.start({
-            versionCode: 2026101303,
+            versionCode: 2026101304,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
