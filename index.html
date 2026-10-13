@@ -92,13 +92,14 @@
 
         // Overlay text follows the sender's app language (sent in customData.language).
         const OVERLAY_TEXT = {
-            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel', unsupportedCodec: 'Den här Chromecasten kan inte spela den här videon' },
-            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error', unsupportedCodec: "This Chromecast doesn't support this video" }
+            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel', unknown: 'okänt', track: 'Spår', unsupportedCodec: 'Den här Chromecasten kan inte spela den här videon' },
+            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error', unknown: 'unknown', track: 'Track', unsupportedCodec: "This Chromecast doesn't support this video" }
         };
-        let currentLanguage = 'sv';
+        // English unless the app asks for Swedish: an older app or an unknown language gets English.
+        let currentLanguage = 'en';
         function tr(key) {
-            const table = OVERLAY_TEXT[currentLanguage] || OVERLAY_TEXT.sv;
-            return table[key] || OVERLAY_TEXT.sv[key] || key;
+            const table = OVERLAY_TEXT[currentLanguage] || OVERLAY_TEXT.en;
+            return table[key] || OVERLAY_TEXT.en[key] || key;
         }
 
         let hideOverlayTimer = null;
@@ -143,7 +144,7 @@
                     tracks: [...audioTracks.map(t => ({
                         id: t.trackId,
                         language: t.language || '',
-                        name: t.name || t.language || `Spår ${t.trackId}`,
+                        name: t.name || t.language || tr('track') + ' ' + t.trackId,
                         type: 'AUDIO',
                         isSelected: activeAudio ? (t.trackId === activeAudio.trackId) : false
                     })), ...textTracks.map(t => ({
@@ -393,7 +394,7 @@
             preferredAudioName = customData?.preferredAudioName || '';
             preferredSubtitle = customData?.preferredSubtitle || '';
             preferredSubtitleName = customData?.preferredSubtitleName || '';
-            currentLanguage = customData?.language === 'en' ? 'en' : 'sv';
+            currentLanguage = customData?.language === 'sv' ? 'sv' : 'en';
             currentVodGateway = customData?.vodGateway === true;
 
             // Live: the sender names the channel's video codec from its playlist. A device that says
@@ -654,7 +655,7 @@
                 error: event.error,
                 triggeredByEventType: event.triggeredByEventType
             });
-            const errDetail = event.detailedErrorCode || event.reason || 'okänt';
+            const errDetail = event.detailedErrorCode || event.reason || tr('unknown');
             const overlayTitle = document.getElementById('channel-title').textContent || 'EasyChannel IPTV';
             if (vodCodecReported) {
                 // Follow-up errors of a format failure already explained to the sender.
@@ -730,7 +731,7 @@
 
 
         context.start({
-            versionCode: 2026101304,
+            versionCode: 2026101305,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
