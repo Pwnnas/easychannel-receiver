@@ -237,6 +237,7 @@
             clearTimeout(vodCodecWarningTimer);
             vodCodecWarningTimer = null;
             stopDoubtedWatch();
+            stopVodFrameWatch();
             showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', tr('unsupportedCodec'), null, 0);
             errorOverlayShown = true;
             try {
@@ -257,6 +258,44 @@
                 if (firstTime !== null && time - firstTime > 2) { stopDoubtedWatch(); return; }
                 if (Date.now() - started >= DOUBTED_STALL_MS) {
                     console.log('[EasyChannel IPTV Receiver] doubted live format did not start:', vodCodecWarning);
+                    reportCodecFailure();
+                }
+            }, 1000);
+        }
+        // A VOD whose format the device doubted can "play" with no picture: an older Chromecast
+        // given 4K HEVC decodes only the audio, the clock runs and no error ever comes. Once the
+        // clock has run a few seconds, no decoded frame means the video cannot be shown.
+        const VOD_NO_FRAMES_AFTER_S = 4;
+        let vodFrameWatch = null;
+        function stopVodFrameWatch() {
+            if (vodFrameWatch) clearInterval(vodFrameWatch);
+            vodFrameWatch = null;
+        }
+        function mediaElement() {
+            try {
+                const element = typeof playerManager.getMediaElement === 'function' ? playerManager.getMediaElement() : null;
+                if (element) return element;
+            } catch (_) {}
+            const player = document.getElementById('media-player');
+            return document.querySelector('video') || (player && player.shadowRoot && player.shadowRoot.querySelector('video')) || null;
+        }
+        function decodedFrames() {
+            const video = mediaElement();
+            if (!video) return undefined;
+            if (typeof video.getVideoPlaybackQuality === 'function') return video.getVideoPlaybackQuality().totalVideoFrames;
+            return typeof video.webkitDecodedFrameCount === 'number' ? video.webkitDecodedFrameCount : undefined;
+        }
+        function watchVodFrames() {
+            stopVodFrameWatch();
+            let startTime = null;
+            vodFrameWatch = setInterval(() => {
+                if (vodCodecReported || !vodCodecWarning || !currentIsVod) { stopVodFrameWatch(); return; }
+                const frames = decodedFrames();
+                if (frames === undefined || frames > 0) { stopVodFrameWatch(); return; }
+                const time = playerManager.getCurrentTimeSec();
+                if (startTime === null) startTime = time;
+                if (time - startTime >= VOD_NO_FRAMES_AFTER_S) {
+                    console.log('[EasyChannel IPTV Receiver] doubted VOD format plays without video frames:', vodCodecWarning);
                     reportCodecFailure();
                 }
             }, 1000);
@@ -657,6 +696,7 @@
                 document.getElementById('channel-overlay').classList.remove('visible');
             }
             if (!vodCodecWarning || vodCodecWarningTimer) return;
+            if (currentIsVod) watchVodFrames();
             const warning = vodCodecWarning;
             vodCodecWarningTimer = setTimeout(() => {
                 if (vodCodecWarning === warning) vodCodecWarning = null;
@@ -747,7 +787,7 @@
 
 
         context.start({
-            versionCode: 2026101306,
+            versionCode: 2026101307,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
