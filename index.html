@@ -92,8 +92,8 @@
 
         // Overlay text follows the sender's app language (sent in customData.language).
         const OVERLAY_TEXT = {
-            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel', unsupportedCodec: 'Videoformatet stöds inte av denna Chromecast' },
-            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error', unsupportedCodec: 'Video format is not supported by this Chromecast' }
+            sv: { connected: 'Ansluten', loading: 'Laddar ström...', playing: 'Spelar', audio: 'Ljud', text: 'Text', off: 'Av', error: 'Fel', unsupportedCodec: 'Den här Chromecasten kan inte spela den här videon' },
+            en: { connected: 'Connected', loading: 'Loading stream...', playing: 'Playing', audio: 'Audio', text: 'Subtitles', off: 'Off', error: 'Error', unsupportedCodec: "This Chromecast doesn't support this video" }
         };
         let currentLanguage = 'sv';
         function tr(key) {
@@ -369,15 +369,19 @@
                 } catch (e) {
                     (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] canDisplayType check failed:', e);
                 }
-                console.log('[EasyChannel IPTV Receiver] live canDisplayType result:', { codecs, width, height, frameRate, supported });
-                if (!supported) {
+                // canDisplayType cannot be asked about interlaced video, which an older Chromecast does
+                // not show (1080i); the sender marks it, and it is doubted the same way.
+                const interlaced = customData.videoInterlaced === true;
+                console.log('[EasyChannel IPTV Receiver] live canDisplayType result:', { codecs, width, height, frameRate, interlaced, supported });
+                if (!supported || interlaced) {
                     vodCodecWarning = {
                         type: 'LIVE_UNSUPPORTED_CODEC',
                         contentId: media?.contentId || media?.contentUrl || '',
                         codecs: codecs,
                         width: width,
                         height: height,
-                        frameRate: frameRate
+                        frameRate: frameRate,
+                        interlaced: interlaced
                     };
                 }
             }
@@ -696,7 +700,7 @@
 
 
         context.start({
-            versionCode: 2026101302,
+            versionCode: 2026101303,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
