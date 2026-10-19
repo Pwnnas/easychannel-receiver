@@ -28,7 +28,14 @@
         #channel-overlay {
             position: absolute;
             top: 48px;
-            left: 48px;
+            /* Centred with margins, not a transform: effects on the layer above the video have
+               blanked the Chromecast picture before (see backdrop-filter below). */
+            left: 0;
+            right: 0;
+            margin: 0 auto;
+            width: max-content;
+            max-width: 70vw;
+            box-sizing: border-box;
             display: flex;
             align-items: center;
             /* NOTE: backdrop-filter breaks the Chromecast hardware video overlay
@@ -56,6 +63,10 @@
             transition: none;
         }
 
+        #channel-overlay > div {
+            min-width: 0;
+        }
+
         #channel-logo {
             width: 56px;
             height: 56px;
@@ -70,6 +81,11 @@
             font-size: 28px;
             font-weight: 700;
             line-height: 1.2;
+            /* Provider titles can repeat the series name; two lines at most. */
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
 
         #channel-status {
@@ -97,7 +113,7 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
-        const RECEIVER_VERSION = 2026101904;
+        const RECEIVER_VERSION = 2026101905;
         // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
         // smaller VOD buffer.
         const LITE_DEVICE = canDecodeHevc() === false;
