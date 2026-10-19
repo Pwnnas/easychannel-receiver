@@ -622,7 +622,9 @@
                             MediaSource.isTypeSupported('audio/mp4; codecs="' + codec + '"');
                     } catch (_) { return false; }
                 };
-                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3') };
+                // hevc false marks an older Chromecast (gen 1-3): the sender then sends stereo audio
+                // from the start instead of learning it from error 100 on 5.1 AAC.
+                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc() };
                 console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
                 try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
                 catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
@@ -786,9 +788,22 @@
         const playbackConfig = new cast.framework.PlaybackConfig();
         playbackConfig.autoResumeDuration = 5;
 
+        // An older Chromecast (no HEVC, 512 MB) closes the receiver once Shaka's default buffer of
+        // gateway VOD (10 s segments of 4-7 MB, 30 s kept behind) fills its memory. VOD there keeps
+        // little ahead and almost nothing behind; other devices and live TV keep the defaults.
+        playerManager.setMediaPlaybackInfoHandler((loadRequestData, config) => {
+            const customData = loadRequestData.customData || loadRequestData.media?.customData;
+            if (customData?.vod !== true || canDecodeHevc() !== false) return config;
+            const constrained = Object.assign(new cast.framework.PlaybackConfig(), config);
+            constrained.shakaConfig = Object.assign({}, config.shakaConfig, {
+                streaming: Object.assign({}, config.shakaConfig?.streaming, { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 4 })
+            });
+            console.log('[EasyChannel IPTV Receiver] VOD on a constrained device: small buffer', constrained.shakaConfig.streaming);
+            return constrained;
+        });
 
         context.start({
-            versionCode: 2026101501,
+            versionCode: 2026101901,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
