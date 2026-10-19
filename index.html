@@ -96,6 +96,8 @@
         const LEGACY_CHANNEL = 'urn:x-cast:com.senioriptv';
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
+        // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
+        const RECEIVER_VERSION = 2026101903;
         // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
         // smaller VOD buffer.
         const LITE_DEVICE = canDecodeHevc() === false;
@@ -636,7 +638,7 @@
                 };
                 // hevc false marks an older Chromecast (gen 1-3): the sender then sends stereo audio
                 // from the start instead of learning it from error 100 on 5.1 AAC.
-                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc() };
+                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc(), receiver: RECEIVER_VERSION };
                 console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
                 try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
                 catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
@@ -810,7 +812,7 @@
         }
 
         context.start({
-            versionCode: 2026101902,
+            versionCode: RECEIVER_VERSION,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
