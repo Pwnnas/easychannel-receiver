@@ -49,6 +49,13 @@
             opacity: 1;
         }
 
+        /* Older Chromecast: no blurred shadow or fade to recomposite over the video. */
+        body.lite #channel-overlay {
+            background: rgb(13, 32, 55);
+            box-shadow: none;
+            transition: none;
+        }
+
         #channel-logo {
             width: 56px;
             height: 56px;
@@ -89,6 +96,10 @@
         const LEGACY_CHANNEL = 'urn:x-cast:com.senioriptv';
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
+        // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
+        // smaller VOD buffer.
+        const LITE_DEVICE = canDecodeHevc() === false;
+        if (LITE_DEVICE) document.body.classList.add('lite');
 
         // Overlay text follows the sender's app language (sent in customData.language).
         const OVERLAY_TEXT = {
@@ -115,7 +126,8 @@
             titleEl.textContent = title || 'EasyChannel IPTV';
             statusEl.textContent = status || '';
 
-            if (logoUrl) {
+            // A provider image is decoded at full size however small it is shown.
+            if (logoUrl && !LITE_DEVICE) {
                 logoEl.src = logoUrl;
                 logoEl.style.display = 'block';
             } else {
@@ -787,23 +799,18 @@
         // handles the proxy's single-variant muxed TS correctly.
         const playbackConfig = new cast.framework.PlaybackConfig();
         playbackConfig.autoResumeDuration = 5;
-
-        // An older Chromecast (no HEVC, 512 MB) closes the receiver once Shaka's default buffer of
-        // gateway VOD (10 s segments of 4-7 MB, 30 s kept behind) fills its memory. VOD there keeps
-        // little ahead and almost nothing behind; other devices and live TV keep the defaults.
-        playerManager.setMediaPlaybackInfoHandler((loadRequestData, config) => {
-            const customData = loadRequestData.customData || loadRequestData.media?.customData;
-            if (customData?.vod !== true || canDecodeHevc() !== false) return config;
-            const constrained = Object.assign(new cast.framework.PlaybackConfig(), config);
-            constrained.shakaConfig = Object.assign({}, config.shakaConfig, {
-                streaming: Object.assign({}, config.shakaConfig?.streaming, { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 4 })
-            });
-            console.log('[EasyChannel IPTV Receiver] VOD on a constrained device: small buffer', constrained.shakaConfig.streaming);
-            return constrained;
-        });
+        // Chromium caps an H.264 MSE video buffer at 30 MiB on Cast. Gateway VOD segments are 10 s
+        // and 4-7 MB, so Shaka's default goal plus 30 s kept behind reaches the cap; appends then
+        // fail and playback ends in error 100. An older Chromecast (no HEVC) keeps the total near
+        // 25 s. Shaka plays only DASH here (live HLS uses the native player) and reads this when
+        // the player is created, so it has to be in the config given to context.start.
+        if (LITE_DEVICE) {
+            playbackConfig.shakaConfig = { streaming: { bufferingGoal: 10, rebufferingGoal: 2, bufferBehind: 2 } };
+            console.log('[EasyChannel IPTV Receiver] older Chromecast: small VOD buffer', playbackConfig.shakaConfig.streaming);
+        }
 
         context.start({
-            versionCode: 2026101901,
+            versionCode: 2026101902,
             playbackConfig: playbackConfig,
             customNamespaces: {
                 [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON,
