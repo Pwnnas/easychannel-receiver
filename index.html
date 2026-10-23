@@ -113,7 +113,7 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
-        const RECEIVER_VERSION = 2026101906;
+        const RECEIVER_VERSION = 2026102301;
         // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
         // smaller VOD buffer.
         const LITE_DEVICE = canDecodeHevc() === false;
@@ -254,14 +254,89 @@
         // failing. A doubted live format that has not started moving by then counts as a failure.
         const DOUBTED_STALL_MS = 20000;
         let doubtedWatch = null;
+
+        // Anonymous playback reports for the developer (see privacy.html): what was cast (stream,
+        // container, codec, resolution), how it went (error code, or played for 20 s) and what this
+        // device says it can decode. Never URLs (an Xtream address holds the provider login), titles
+        // or channel names. The server keeps only the fields it knows and stores no IP address.
+        const REPORT_URL = 'https://easychannel-demo.sharedevil.org/cast-report';
+        const REPORT_LIMIT = 40;
+        const REPORT_PLAYED_AFTER_MS = 20000;
+        const reportSession = Math.random().toString(36).slice(2, 12);
+        let reportsSent = 0;
+        let reportMedia = null;
+        let reportLoadAt = 0;
+        let reportStartupMs = undefined;
+        let reportFailed = false;
+        let reportPlayedTimer = null;
+        let reportedErrors = new Set();
+        let reportCaps = null;
+        function withoutUrls(text) {
+            return text == null ? undefined : String(text).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>').slice(0, 200);
+        }
+        // Asked once, after the context has started (getDeviceCapabilities is empty before that).
+        function deviceCaps() {
+            if (reportCaps) return reportCaps;
+            const display = (mime, codecs, width, height) => {
+                try {
+                    return typeof context.canDisplayType === 'function'
+                        ? Boolean(context.canDisplayType(mime, codecs, width, height)) : undefined;
+                } catch (_) { return undefined; }
+            };
+            const audio = (codec) => {
+                try { return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mp4; codecs="' + codec + '"'); }
+                catch (_) { return undefined; }
+            };
+            let flags = {};
+            try { flags = (typeof context.getDeviceCapabilities === 'function' && context.getDeviceCapabilities()) || {}; } catch (_) {}
+            const names = (cast.framework.system && cast.framework.system.DeviceCapabilities) || {};
+            const flag = (name) => typeof flags[names[name]] === 'boolean' ? flags[names[name]] : undefined;
+            reportCaps = {
+                hevc: canDecodeHevc(),
+                hevc4k: display('video/mp4', 'hev1.1.6.L153.B0', 3840, 2160),
+                h264_4k: display('video/mp4', 'avc1.640033', 3840, 2160),
+                vp9: display('video/webm', 'vp9', 1920, 1080),
+                av1: display('video/mp4', 'av01.0.08M.08', 1920, 1080),
+                ec3: audio('ec-3'),
+                ac3: audio('ac-3'),
+                hdr: flag('IS_HDR_SUPPORTED'),
+                dv: flag('IS_DV_SUPPORTED')
+            };
+            return reportCaps;
+        }
+        function sendReport(kind, details) {
+            if (reportsSent >= REPORT_LIMIT) return;
+            reportsSent++;
+            try {
+                const body = JSON.stringify(Object.assign({ kind: kind, receiver: RECEIVER_VERSION, session: reportSession,
+                    ua: navigator.userAgent, caps: deviceCaps() }, reportMedia || {}, details || {}));
+                // A text/plain beacon needs no CORS preflight and is sent even if the page closes.
+                if (navigator.sendBeacon && navigator.sendBeacon(REPORT_URL, body)) return;
+                fetch(REPORT_URL, { method: 'POST', body: body, mode: 'no-cors', keepalive: true }).catch(() => {});
+            } catch (_) {}
+        }
+        // One report per kind and error code for each LOAD: a live stream can repeat a segment error.
+        function reportPlaybackError(kind, event, critical) {
+            if (critical) reportFailed = true;
+            const code = Number(event && event.detailedErrorCode);
+            const key = kind + ':' + (Number.isFinite(code) ? code : (event && event.reason));
+            if (reportedErrors.has(key)) return;
+            reportedErrors.add(key);
+            sendReport(kind, {
+                code: Number.isFinite(code) ? code : undefined,
+                reason: withoutUrls(event && event.reason),
+                severity: event && typeof event.severity === 'number' ? event.severity : undefined
+            });
+        }
         function stopDoubtedWatch() {
             if (doubtedWatch) clearInterval(doubtedWatch);
             doubtedWatch = null;
         }
         // Playback failed on a format the device had doubted: say so on the TV and tell the sender.
         // The box stays until the next LOAD, or until the video plays after all.
-        function reportCodecFailure() {
+        function reportCodecFailure(event) {
             const errorPayload = vodCodecWarning;
+            reportPlaybackError('codec', event || { reason: errorPayload.type }, true);
             vodCodecWarning = null;
             vodCodecReported = true;
             clearTimeout(vodCodecWarningTimer);
@@ -465,6 +540,29 @@
             preferredSubtitleName = customData?.preferredSubtitleName || '';
             currentLanguage = customData?.language === 'sv' ? 'sv' : 'en';
             currentVodGateway = customData?.vodGateway === true;
+            clearTimeout(reportPlayedTimer);
+            reportPlayedTimer = null;
+            reportLoadAt = Date.now();
+            reportStartupMs = undefined;
+            reportFailed = false;
+            reportedErrors = new Set();
+            const positive = (value) => Number(value) > 0 ? Number(value) : undefined;
+            const text = (value) => value ? String(value).slice(0, 64) : undefined;
+            reportMedia = {
+                stream: isVod ? 'vod' : 'live',
+                contentType: text(media?.contentType),
+                gateway: isVod ? currentVodGateway : undefined,
+                videoMime: text(customData?.videoMime),
+                videoCodecs: text(customData?.videoCodecs),
+                width: positive(customData?.videoWidth),
+                height: positive(customData?.videoHeight),
+                frameRate: positive(customData?.videoFrameRate),
+                interlaced: customData?.videoInterlaced === true ? true : undefined,
+                // Sent by newer app versions; reported as they are when present.
+                audioCodecs: text(customData?.audioCodecs),
+                audioChannels: positive(customData?.audioChannels),
+                appVersion: text(customData?.appVersion)
+            };
 
             // Live: the sender names the channel's video codec from its playlist. A device that says
             // no is not trusted up front (see vodCodecWarning); the warning explains a failure that
@@ -723,6 +821,13 @@
         // Counted from the first PLAYING only; seeking or pausing must not keep the warning alive.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
             if (!currentIsVod) livePlayed = true;
+            if (reportMedia && reportStartupMs === undefined) {
+                reportStartupMs = Date.now() - reportLoadAt;
+                const played = reportMedia;
+                reportPlayedTimer = setTimeout(() => {
+                    if (reportMedia === played && !reportFailed) sendReport('ok', { startupMs: reportStartupMs });
+                }, REPORT_PLAYED_AFTER_MS);
+            }
             if (errorOverlayShown) {
                 errorOverlayShown = false;
                 document.getElementById('channel-overlay').classList.remove('visible');
@@ -754,13 +859,14 @@
             const codecFailure = currentIsVod ? CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))
                 : !livePlayed;
             if (vodCodecWarning && codecFailure) {
-                reportCodecFailure();
+                reportCodecFailure(event);
                 return;
             }
             // A recoverable error (a late live segment, severity ERROR) comes while the channel keeps
             // playing and would leave the box up for good; only a critical error stops playback.
             const severities = cast.framework.events.ErrorSeverity || {};
             const critical = severities.CRITICAL !== undefined ? severities.CRITICAL : 2;
+            reportPlaybackError('error', event, event.severity === undefined || event.severity === critical);
             if (event.severity === undefined || event.severity === critical) {
                 showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
                 errorOverlayShown = true;
@@ -779,6 +885,7 @@
 
         window.addEventListener('error', (e) => {
             console.error('[EasyChannel IPTV Receiver] Window error:', e);
+            sendReport('window', { message: withoutUrls(e.message) });
             try {
                 context.sendCustomMessage(CUSTOM_CHANNEL, undefined, {
                     type: 'WINDOW_ERROR',
