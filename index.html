@@ -312,6 +312,9 @@
                 hevc4k: display('video/mp4', 'hev1.1.6.L153.B0', 3840, 2160),
                 h264_4k: display('video/mp4', 'avc1.640033', 3840, 2160),
                 fullHd: canShowFullHd(),
+                // 1080p50/60 H.264 (level 4.2) asked without a size: with fullHd false, a yes means the
+                // TV refuses the size, not the codec, and the sender's size-less manifest can play.
+                h264_l42: display('video/mp4', 'avc1.64002a'),
                 vp9: display('video/webm', 'vp9', 1920, 1080),
                 av1: display('video/mp4', 'av01.0.08M.08', 1920, 1080),
                 ec3: audio('ec-3'),
