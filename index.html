@@ -113,7 +113,7 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
-        const RECEIVER_VERSION = 2026102301;
+        const RECEIVER_VERSION = 2026102701;
         // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
         // smaller VOD buffer.
         const LITE_DEVICE = canDecodeHevc() === false;
@@ -233,8 +233,24 @@
             return false;
         }
 
+        // The sender's saved audio choice: a name only one track in the language has, else the track at
+        // the saved position among the language's tracks, else the first with the name or language. Two
+        // tracks in one language ("swe"/"swe") are told apart only by the position, which the phone
+        // counts the same way in its own list.
+        function pickAudioTrack(tracks, language, name, position) {
+            const matching = tracks.filter(t => matchLang(t.language, language));
+            const named = name ? matching.filter(t => t.name === name) : [];
+            if (named.length === 1) return named[0];
+            if (position >= 0 && position < matching.length) return matching[position];
+            const code = String(language || '').toLowerCase();
+            return named[0] || matching.find(t => String(t.language || '').toLowerCase() === code) || matching[0]
+                || (name ? tracks.find(t => t.name === name) : undefined);
+        }
+
         let preferredLanguage = '';
         let preferredAudioName = '';
+        // Where the chosen track stands among the tracks in its language; -1 when none was picked.
+        let preferredAudioIndex = -1;
         let audioPreferenceApplied = false;
         let preferredSubtitle = '';
         let preferredSubtitleName = '';
@@ -295,6 +311,7 @@
                 hevc: canDecodeHevc(),
                 hevc4k: display('video/mp4', 'hev1.1.6.L153.B0', 3840, 2160),
                 h264_4k: display('video/mp4', 'avc1.640033', 3840, 2160),
+                fullHd: canShowFullHd(),
                 vp9: display('video/webm', 'vp9', 1920, 1080),
                 av1: display('video/mp4', 'av01.0.08M.08', 1920, 1080),
                 ec3: audio('ec-3'),
@@ -416,18 +433,24 @@
                     ? Boolean(context.canDisplayType('video/mp4', 'hev1.1.6.L123.B0', 1920, 1080)) : undefined;
             } catch (_) { return undefined; }
         }
+        // false on a TV that says it cannot show 1080p H.264 (some HD panels with Cast built in). Shaka
+        // asks the same question with the size from the manifest and drops a 1080p rendition, so the
+        // sender then leaves that size out; the decoder plays 1080p and scales it down.
+        function canShowFullHd() {
+            try {
+                return typeof context.canDisplayType === 'function'
+                    ? Boolean(context.canDisplayType('video/mp4', 'avc1.640028', 1920, 1080)) : undefined;
+            } catch (_) { return undefined; }
+        }
         // undefined = not resolved yet, [] = subtitles off, [id] = the single selected track.
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
         function applyVodAudioPreference() {
-            if (!currentIsVod || audioPreferenceApplied || !preferredLanguage) return;
+            if (!currentIsVod || audioPreferenceApplied || (!preferredLanguage && preferredAudioIndex < 0)) return;
             try {
                 const manager = playerManager.getAudioTracksManager();
                 const tracks = manager.getTracks() || [];
-                const match = tracks.find(t => matchLang(t.language, preferredLanguage) &&
-                    (!preferredAudioName || t.name === preferredAudioName))
-                    || tracks.find(t => matchLang(t.language, preferredLanguage))
-                    || (preferredAudioName && tracks.find(t => t.name === preferredAudioName));
+                const match = pickAudioTrack(tracks, preferredLanguage, preferredAudioName, preferredAudioIndex);
                 if (match) {
                     manager.setActiveById(match.trackId);
                     audioPreferenceApplied = true;
@@ -536,6 +559,7 @@
                 preferredLanguage = '';
             }
             preferredAudioName = customData?.preferredAudioName || '';
+            preferredAudioIndex = Number.isInteger(customData?.preferredAudioIndex) ? customData.preferredAudioIndex : -1;
             preferredSubtitle = customData?.preferredSubtitle || '';
             preferredSubtitleName = customData?.preferredSubtitleName || '';
             currentLanguage = customData?.language === 'sv' ? 'sv' : 'en';
@@ -667,7 +691,10 @@
                     const mTrack = mediaTracks.find(mt => mt.trackId === wantedId);
                     let audioMatch = null;
                     if (mTrack && mTrack.type === cast.framework.messages.TrackType.AUDIO) {
-                        audioMatch = tracks.find(t => matchLang(t.language, mTrack.language) && t.name === mTrack.name)
+                        // The asked-for id itself first: two tracks in one language can share a name
+                        // ("swe"/"swe"), and matching by language and name always found the first one.
+                        audioMatch = tracks.find(t => t.trackId === wantedId)
+                                  || tracks.find(t => matchLang(t.language, mTrack.language) && t.name === mTrack.name)
                                   || tracks.find(t => matchLang(t.language, mTrack.language));
                     }
                     if (!audioMatch) {
@@ -702,12 +729,10 @@
 
             if (currentIsVod) {
                 applyVodAudioPreference();
-            } else if (preferredLanguage) {
+            } else if (preferredLanguage || preferredAudioIndex >= 0) {
                 const normTarget = normalizeLang(preferredLanguage);
-                let matchedTrack = tracks.find(t => matchLang(t.language, preferredLanguage) &&
-                    (!preferredAudioName || t.name === preferredAudioName))
-                    || tracks.find(t => matchLang(t.language, preferredLanguage));
-                if (!matchedTrack) {
+                let matchedTrack = pickAudioTrack(tracks, preferredLanguage, preferredAudioName, preferredAudioIndex);
+                if (!matchedTrack && preferredLanguage) {
                     matchedTrack = tracks.find(t => {
                         const name = (t.name || '').toLowerCase();
                         return name.includes(preferredLanguage.toLowerCase()) || (normTarget && name.includes(normTarget));
@@ -716,7 +741,7 @@
                 if (matchedTrack) {
                     console.log('[EasyChannel IPTV Receiver] Selecting initial audio track by ID:', matchedTrack.trackId, matchedTrack.language);
                     audioManager.setActiveById(matchedTrack.trackId);
-                } else {
+                } else if (preferredLanguage) {
                     try {
                         audioManager.setActiveByLanguage(preferredLanguage);
                     } catch (err) {
@@ -751,8 +776,10 @@
                     } catch (_) { return false; }
                 };
                 // hevc false marks an older Chromecast (gen 1-3): the sender then sends stereo audio
-                // from the start instead of learning it from error 100 on 5.1 AAC.
-                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc(), receiver: RECEIVER_VERSION };
+                // from the start instead of learning it from error 100 on 5.1 AAC. fullHd false: the
+                // sender leaves a 1080p video's size out of the manifest (canShowFullHd).
+                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc(),
+                    fullHd: canShowFullHd(), receiver: RECEIVER_VERSION };
                 console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
                 try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
                 catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
