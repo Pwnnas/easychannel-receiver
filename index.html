@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <title>EasyChannel IPTV Cast Receiver</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="dns-prefetch" href="https://www.gstatic.com">
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <style>
         html, body {
@@ -17,6 +19,7 @@
             background-color: #041E3E;
             overflow: hidden;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
         }
 
         cast-media-player {
@@ -42,25 +45,48 @@
                (the video surface collapses to 1x1 px and the picture goes black),
                so we use a near-opaque background instead of a frosted-glass blur. */
             background: rgba(13, 32, 55, 0.96);
-            padding: 16px 24px;
+            padding: 18px 28px;
             border-radius: 16px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-left: 4px solid #FFD166;
             z-index: 100;
             opacity: 0;
-            transition: opacity 0.5s ease-in-out;
+            visibility: hidden;
+            transition: opacity 0.35s ease-in-out, visibility 0s linear 0.35s;
             pointer-events: none;
         }
 
         #channel-overlay.visible {
             opacity: 1;
+            visibility: visible;
+            transition: opacity 0.35s ease-in-out, visibility 0s;
         }
 
-        /* Older Chromecast: no blurred shadow or fade to recomposite over the video. */
+        #channel-overlay.state-playing {
+            border-left-color: #06D6A0;
+        }
+
+        #channel-overlay.state-error {
+            border-color: rgba(255, 107, 107, 0.45);
+            border-left: 4px solid #FF6B6B;
+        }
+
+        /* Older Chromecast & 1 GB TV sticks: no blurred shadow, fade, or logo layer over video. */
         body.lite #channel-overlay {
             background: rgb(13, 32, 55);
+            border-color: #263B54;
             box-shadow: none;
             transition: none;
+            display: none;
+        }
+
+        body.lite #channel-overlay.visible {
+            display: flex;
+        }
+
+        body.lite #channel-logo {
+            display: none !important;
         }
 
         #channel-overlay > div {
@@ -71,9 +97,10 @@
             width: 56px;
             height: 56px;
             object-fit: contain;
-            margin-right: 16px;
+            margin-right: 18px;
             border-radius: 8px;
             display: none;
+            flex-shrink: 0;
         }
 
         #channel-title {
@@ -81,6 +108,7 @@
             font-size: 28px;
             font-weight: 700;
             line-height: 1.2;
+            letter-spacing: -0.01em;
             /* Provider titles can repeat the series name; two lines at most. */
             display: -webkit-box;
             -webkit-line-clamp: 2;
@@ -92,13 +120,38 @@
             color: #FFD166;
             font-size: 18px;
             font-weight: 500;
-            margin-top: 4px;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #channel-status::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #FFD166;
+            flex-shrink: 0;
+        }
+
+        #channel-overlay.state-playing #channel-status::before {
+            background-color: #06D6A0;
+        }
+
+        #channel-overlay.state-error #channel-status {
+            color: #FF8787;
+        }
+
+        #channel-overlay.state-error #channel-status::before {
+            background-color: #FF6B6B;
         }
     </style>
 </head>
 <body>
     <div id="channel-overlay">
-        <img id="channel-logo" alt="">
+        <img id="channel-logo" alt="" decoding="async">
         <div>
             <div id="channel-title">EasyChannel IPTV</div>
             <div id="channel-status">Ansluten</div>
@@ -113,16 +166,22 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
-        const RECEIVER_VERSION = 2026110102;
-        // An older Chromecast (gen 1-3: no HEVC, 512 MB, weak GPU) gets a lighter overlay and a
-        // smaller VOD buffer. It is decided here, before context.start, where the buffer has to be set.
-        // canDisplayType did not say no here on a gen 3 that answered hevc:false right after start
-        // (2026-10-30: logo shown, large buffer), so Media Source is asked. Android TV and Google TV
-        // have HEVC and "Android" in their user agent, so they are never taken for an older Chromecast.
-        // A TV stick with 1 GB (Mi TV Stick, 2026-11-01) is light too: with the full buffer it swapped
-        // 436 MB, and 1080p50 VOD showed only the keyframes while the sound went on.
+        const RECEIVER_VERSION = 2026111402;
+        // Older Chromecasts (gen 1-3: no HEVC, 512 MB, weak GPU) and 1 GB / 1080p-only Android TV
+        // sticks (e.g. Xiaomi TV Stick HD, Mi TV Stick) get a lighter overlay without channel logos
+        // and a smaller Shaka MSE buffer so 1080p50 streams stay within RAM without OOM/stalling.
+        function isLowMemoryDevice() {
+            if (navigator.deviceMemory > 0 && navigator.deviceMemory <= 1.5) return true;
+            try {
+                if (typeof performance !== 'undefined' && performance.memory &&
+                    performance.memory.jsHeapSizeLimit > 0 && performance.memory.jsHeapSizeLimit <= 268435456) {
+                    return true;
+                }
+            } catch (_) {}
+            return /MiTV-AESP0|Mi TV Stick|MiTV-AFKR0|MIBOX3|Aquaman|Chromecast HD/i.test(navigator.userAgent || '');
+        }
         const LITE_AT_START = (!/Android/.test(navigator.userAgent) && hevcByMediaSource() === false) ||
-            (navigator.deviceMemory > 0 && navigator.deviceMemory <= 1);
+            isLowMemoryDevice();
         let LITE_DEVICE = LITE_AT_START;
         if (LITE_DEVICE) document.body.classList.add('lite');
         function hevcByMediaSource() {
@@ -130,6 +189,40 @@
                 return typeof MediaSource !== 'undefined'
                     ? MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L93.B0"') : undefined;
             } catch (_) { return undefined; }
+        }
+        function canDecode4k() {
+            try {
+                if (typeof context.canDisplayType !== 'function') return undefined;
+                return Boolean(
+                    context.canDisplayType('video/mp4', 'hev1.1.6.L153.B0', 3840, 2160) ||
+                    context.canDisplayType('video/mp4', 'avc1.640033', 3840, 2160)
+                );
+            } catch (_) { return undefined; }
+        }
+        function refreshLiteDevice() {
+            if (LITE_DEVICE) return true;
+            const noHevc = canDecodeHevc() === false;
+            const hdOnlyStick = canDecodeHevc() === true && canDecode4k() === false;
+            if (isLowMemoryDevice() || noHevc || hdOnlyStick) {
+                LITE_DEVICE = true;
+                if (document.body) document.body.classList.add('lite');
+            }
+            return LITE_DEVICE;
+        }
+
+        // Cache DOM elements once to avoid repeated queries on low-power Cast hardware.
+        const overlayEl = document.getElementById('channel-overlay');
+        const titleEl = document.getElementById('channel-title');
+        const statusEl = document.getElementById('channel-status');
+        const logoEl = document.getElementById('channel-logo');
+        const playerEl = document.getElementById('media-player');
+        let cachedVideoEl = null;
+
+        if (logoEl) {
+            logoEl.addEventListener('error', () => {
+                logoEl.style.display = 'none';
+                logoEl.removeAttribute('src');
+            });
         }
 
         // Overlay text follows the sender's app language (sent in customData.language).
@@ -145,28 +238,46 @@
         }
 
         let hideOverlayTimer = null;
+        let loadCompleteTimer = null;
+        let refreshOverlayTimer = null;
+        let bufferingOverlayTimer = null;
         // An error overlay stays up until playback resumes: a live stream often recovers by itself.
         let errorOverlayShown = false;
-        function showOverlay(title, status, logoUrl, durationMs = 6000) {
-            errorOverlayShown = false;
-            const overlay = document.getElementById('channel-overlay');
-            const titleEl = document.getElementById('channel-title');
-            const statusEl = document.getElementById('channel-status');
-            const logoEl = document.getElementById('channel-logo');
+        function showOverlay(title, status, logoUrl, durationMs = 6000, stateClass = '') {
+            errorOverlayShown = stateClass === 'state-error';
+            const overlay = overlayEl || document.getElementById('channel-overlay');
+            const tEl = titleEl || document.getElementById('channel-title');
+            const sEl = statusEl || document.getElementById('channel-status');
+            const lEl = logoEl || document.getElementById('channel-logo');
 
-            titleEl.textContent = title || 'EasyChannel IPTV';
-            statusEl.textContent = status || '';
+            tEl.textContent = title || 'EasyChannel IPTV';
+            sEl.textContent = status || '';
 
             // A provider image is decoded at full size however small it is shown.
             if (logoUrl && !LITE_DEVICE) {
-                logoEl.src = logoUrl;
-                logoEl.style.display = 'block';
+                if (lEl.getAttribute('src') !== logoUrl) lEl.src = logoUrl;
+                lEl.style.display = 'block';
+            } else if (logoUrl === null && lEl.style.display === 'block' && !LITE_DEVICE) {
+                // Keep existing logo visible during track/status updates for the same channel.
             } else {
-                logoEl.style.display = 'none';
+                lEl.style.display = 'none';
+                lEl.removeAttribute('src');
+            }
+
+            overlay.classList.remove('state-loading', 'state-playing', 'state-error');
+            if (stateClass) {
+                overlay.classList.add(stateClass);
+            } else if (durationMs === 0) {
+                overlay.classList.add('state-error');
+            } else if (status && status.startsWith(tr('playing'))) {
+                overlay.classList.add('state-playing');
+            } else {
+                overlay.classList.add('state-loading');
             }
 
             overlay.classList.add('visible');
             if (hideOverlayTimer) clearTimeout(hideOverlayTimer);
+            hideOverlayTimer = null;
             if (durationMs > 0) {
                 hideOverlayTimer = setTimeout(() => overlay.classList.remove('visible'), durationMs);
             }
@@ -179,6 +290,7 @@
                 const textManager = playerManager.getTextTracksManager();
                 const audioTracks = audioManager.getTracks() || [];
                 const textTracks = textManager.getTracks() || [];
+                if (!force && audioTracks.length === 0 && textTracks.length === 0 && lastTrackSignature === '[]') return;
                 const activeAudio = audioManager.getActiveTrack();
                 const activeTextIds = new Set((textManager.getActiveTracks() || []).map(t => t.trackId));
 
@@ -214,18 +326,45 @@
             if (!code) return '';
             const clean = String(code).trim().toLowerCase().replace('_', '-');
             const synonyms = {
-                'sv': 'swe', 'swe': 'swe',
-                'no': 'nor', 'nor': 'nor', 'nob': 'nor', 'nno': 'nor',
-                'da': 'dan', 'dan': 'dan',
-                'fi': 'fin', 'fin': 'fin',
-                'en': 'eng', 'eng': 'eng',
-                'de': 'deu', 'ger': 'deu', 'deu': 'deu',
-                'fr': 'fra', 'fre': 'fra', 'fra': 'fra',
-                'es': 'spa', 'spa': 'spa',
-                'it': 'ita', 'ita': 'ita',
-                'nl': 'nld', 'dut': 'nld', 'nld': 'nld',
-                'pl': 'pol', 'pol': 'pol',
-                'ru': 'rus', 'rus': 'rus'
+                'sv': 'swe', 'swe': 'swe', 'swedish': 'swe', 'svenska': 'swe',
+                'no': 'nor', 'nor': 'nor', 'nob': 'nor', 'nno': 'nor', 'norwegian': 'nor', 'norsk': 'nor',
+                'da': 'dan', 'dan': 'dan', 'danish': 'dan', 'dansk': 'dan',
+                'fi': 'fin', 'fin': 'fin', 'finnish': 'fin', 'suomi': 'fin',
+                'is': 'isl', 'ice': 'isl', 'isl': 'isl', 'icelandic': 'isl',
+                'en': 'eng', 'eng': 'eng', 'english': 'eng', 'engelska': 'eng',
+                'de': 'deu', 'ger': 'deu', 'deu': 'deu', 'german': 'deu', 'deutsch': 'deu',
+                'fr': 'fra', 'fre': 'fra', 'fra': 'fra', 'french': 'fra',
+                'es': 'spa', 'spa': 'spa', 'spanish': 'spa',
+                'it': 'ita', 'ita': 'ita', 'italian': 'ita',
+                'nl': 'nld', 'dut': 'nld', 'nld': 'nld', 'dutch': 'nld',
+                'pt': 'por', 'por': 'por', 'portuguese': 'por',
+                'pl': 'pol', 'pol': 'pol', 'polish': 'pol',
+                'ru': 'rus', 'rus': 'rus', 'russian': 'rus',
+                'el': 'ell', 'gre': 'ell', 'ell': 'ell', 'greek': 'ell',
+                'tr': 'tur', 'tur': 'tur', 'turkish': 'tur',
+                'ar': 'ara', 'ara': 'ara', 'arabic': 'ara',
+                'cs': 'ces', 'cze': 'ces', 'ces': 'ces', 'czech': 'ces',
+                'sk': 'slk', 'slo': 'slk', 'slk': 'slk', 'slovak': 'slk',
+                'hu': 'hun', 'hun': 'hun', 'hungarian': 'hun',
+                'ro': 'ron', 'rum': 'ron', 'ron': 'ron', 'romanian': 'ron',
+                'bg': 'bul', 'bul': 'bul', 'bulgarian': 'bul',
+                'hr': 'hrv', 'hrv': 'hrv', 'croatian': 'hrv',
+                'sr': 'srp', 'srp': 'srp', 'serbian': 'srp',
+                'bs': 'bos', 'bos': 'bos', 'bosnian': 'bos',
+                'sq': 'sqi', 'alb': 'sqi', 'sqi': 'sqi', 'albanian': 'sqi',
+                'uk': 'ukr', 'ukr': 'ukr', 'ukrainian': 'ukr',
+                'fa': 'fas', 'per': 'fas', 'fas': 'fas', 'persian': 'fas', 'farsi': 'fas',
+                'hi': 'hin', 'hin': 'hin', 'hindi': 'hin',
+                'ur': 'urd', 'urd': 'urd', 'urdu': 'urd',
+                'zh': 'zho', 'chi': 'zho', 'zho': 'zho', 'chinese': 'zho',
+                'ja': 'jpn', 'jpn': 'jpn', 'japanese': 'jpn',
+                'ko': 'kor', 'kor': 'kor', 'korean': 'kor',
+                'he': 'heb', 'iw': 'heb', 'heb': 'heb', 'hebrew': 'heb',
+                'th': 'tha', 'tha': 'tha', 'thai': 'tha',
+                'vi': 'vie', 'vie': 'vie', 'vietnamese': 'vie',
+                'id': 'ind', 'in': 'ind', 'ind': 'ind', 'indonesian': 'ind',
+                'ms': 'msa', 'may': 'msa', 'msa': 'msa', 'malay': 'msa',
+                'ca': 'cat', 'cat': 'cat', 'catalan': 'cat'
             };
             if (synonyms[clean]) return synonyms[clean];
             const prefix2 = clean.substring(0, 2);
@@ -251,11 +390,12 @@
         // tracks in one language ("swe"/"swe") are told apart only by the position, which the phone
         // counts the same way in its own list.
         function pickAudioTrack(tracks, language, name, position) {
-            const matching = tracks.filter(t => matchLang(t.language, language));
+            const matching = language ? tracks.filter(t => matchLang(t.language, language)) : tracks;
             const named = name ? matching.filter(t => t.name === name) : [];
             if (named.length === 1) return named[0];
             if (position >= 0 && position < matching.length) return matching[position];
             const code = String(language || '').toLowerCase();
+            if (!language) return named[0];
             return named[0] || matching.find(t => String(t.language || '').toLowerCase() === code) || matching[0]
                 || (name ? tracks.find(t => t.name === name) : undefined);
         }
@@ -365,18 +505,31 @@
             if (doubtedWatch) clearInterval(doubtedWatch);
             doubtedWatch = null;
         }
+        function clearLoadTimers() {
+            if (vodCodecWarningTimer) clearTimeout(vodCodecWarningTimer);
+            vodCodecWarningTimer = null;
+            if (reportPlayedTimer) clearTimeout(reportPlayedTimer);
+            reportPlayedTimer = null;
+            if (loadCompleteTimer) clearTimeout(loadCompleteTimer);
+            loadCompleteTimer = null;
+            if (refreshOverlayTimer) clearTimeout(refreshOverlayTimer);
+            refreshOverlayTimer = null;
+            if (bufferingOverlayTimer) clearTimeout(bufferingOverlayTimer);
+            bufferingOverlayTimer = null;
+            cachedVideoEl = null;
+            stopDoubtedWatch();
+            stopVodFrameWatch();
+        }
         // Playback failed on a format the device had doubted: say so on the TV and tell the sender.
         // The box stays until the next LOAD, or until the video plays after all.
         function reportCodecFailure(event) {
             const errorPayload = vodCodecWarning;
+            if (!errorPayload) return;
             reportPlaybackError('codec', event || { reason: errorPayload.type }, true);
             vodCodecWarning = null;
             vodCodecReported = true;
-            clearTimeout(vodCodecWarningTimer);
-            vodCodecWarningTimer = null;
-            stopDoubtedWatch();
-            stopVodFrameWatch();
-            showOverlay(document.getElementById('channel-title').textContent || 'EasyChannel IPTV', tr('unsupportedCodec'), null, 0);
+            clearLoadTimers();
+            showOverlay((titleEl || document.getElementById('channel-title')).textContent || 'EasyChannel IPTV', tr('unsupportedCodec'), null, 0, 'state-error');
             errorOverlayShown = true;
             try {
                 if (typeof CUSTOM_CHANNEL !== 'undefined') context.sendCustomMessage(CUSTOM_CHANNEL, undefined, errorPayload);
@@ -387,14 +540,22 @@
         }
         function watchDoubtedStart() {
             stopDoubtedWatch();
-            const started = Date.now();
+            let activeMs = 0;
+            let lastTick = Date.now();
             let firstTime = null;
             doubtedWatch = setInterval(() => {
                 if (vodCodecReported || !vodCodecWarning || currentIsVod) { stopDoubtedWatch(); return; }
+                const state = typeof playerManager.getPlayerState === 'function' ? playerManager.getPlayerState() : undefined;
+                if (state === 'IDLE') { stopDoubtedWatch(); return; }
+                const now = Date.now();
+                const delta = now - lastTick;
+                lastTick = now;
+                if (state === 'PAUSED') return;
+                activeMs += delta;
                 const time = playerManager.getCurrentTimeSec();
                 if (firstTime === null && time > 0) firstTime = time;
                 if (firstTime !== null && time - firstTime > 2) { stopDoubtedWatch(); return; }
-                if (Date.now() - started >= DOUBTED_STALL_MS) {
+                if (activeMs >= DOUBTED_STALL_MS) {
                     console.log('[EasyChannel IPTV Receiver] doubted live format did not start:', vodCodecWarning);
                     reportCodecFailure();
                 }
@@ -410,12 +571,14 @@
             vodFrameWatch = null;
         }
         function mediaElement() {
+            if (cachedVideoEl && cachedVideoEl.isConnected) return cachedVideoEl;
             try {
                 const element = typeof playerManager.getMediaElement === 'function' ? playerManager.getMediaElement() : null;
-                if (element) return element;
+                if (element) { cachedVideoEl = element; return element; }
             } catch (_) {}
-            const player = document.getElementById('media-player');
-            return document.querySelector('video') || (player && player.shadowRoot && player.shadowRoot.querySelector('video')) || null;
+            const player = playerEl || document.getElementById('media-player');
+            cachedVideoEl = document.querySelector('video') || (player && player.shadowRoot && player.shadowRoot.querySelector('video')) || null;
+            return cachedVideoEl;
         }
         function decodedFrames() {
             const video = mediaElement();
@@ -428,6 +591,9 @@
             let startTime = null;
             vodFrameWatch = setInterval(() => {
                 if (vodCodecReported || !vodCodecWarning || !currentIsVod) { stopVodFrameWatch(); return; }
+                const state = typeof playerManager.getPlayerState === 'function' ? playerManager.getPlayerState() : undefined;
+                if (state === 'IDLE') { stopVodFrameWatch(); return; }
+                if (state === 'PAUSED') return;
                 const frames = decodedFrames();
                 if (frames === undefined || frames > 0) { stopVodFrameWatch(); return; }
                 const time = playerManager.getCurrentTimeSec();
@@ -462,17 +628,47 @@
         let vodDesiredTextIds = undefined;
         let vodTextAppliedAt = 0;
         function applyVodAudioPreference() {
-            if (!currentIsVod || audioPreferenceApplied || (!preferredLanguage && preferredAudioIndex < 0)) return;
+            if (!currentIsVod || audioPreferenceApplied || (!preferredLanguage && !preferredAudioName && preferredAudioIndex < 0)) return;
             try {
                 const manager = playerManager.getAudioTracksManager();
                 const tracks = manager.getTracks() || [];
+                if (tracks.length === 0) return;
+                audioPreferenceApplied = true;
                 const match = pickAudioTrack(tracks, preferredLanguage, preferredAudioName, preferredAudioIndex);
                 if (match) {
                     manager.setActiveById(match.trackId);
-                    audioPreferenceApplied = true;
                 }
             } catch (error) {
                 console.warn('[EasyChannel IPTV Receiver] Audio preference pending:', error);
+            }
+        }
+        function applyLiveAudioPreference() {
+            if (currentIsVod || audioPreferenceApplied || (!preferredLanguage && !preferredAudioName && preferredAudioIndex < 0)) return;
+            try {
+                const audioManager = playerManager.getAudioTracksManager();
+                const tracks = audioManager.getTracks() || [];
+                if (tracks.length === 0) return;
+                audioPreferenceApplied = true;
+                const normTarget = normalizeLang(preferredLanguage);
+                let matchedTrack = pickAudioTrack(tracks, preferredLanguage, preferredAudioName, preferredAudioIndex);
+                if (!matchedTrack && preferredLanguage) {
+                    matchedTrack = tracks.find(t => {
+                        const name = (t.name || '').toLowerCase();
+                        return name.includes(preferredLanguage.toLowerCase()) || (normTarget && name.includes(normTarget));
+                    });
+                }
+                if (matchedTrack) {
+                    console.log('[EasyChannel IPTV Receiver] Selecting initial audio track by ID:', matchedTrack.trackId, matchedTrack.language);
+                    audioManager.setActiveById(matchedTrack.trackId);
+                } else if (preferredLanguage) {
+                    try {
+                        audioManager.setActiveByLanguage(preferredLanguage);
+                    } catch (err) {
+                        console.warn('[EasyChannel IPTV Receiver] Preferred audio language unavailable:', preferredLanguage, err);
+                    }
+                }
+            } catch (error) {
+                console.warn('[EasyChannel IPTV Receiver] Live audio preference pending:', error);
             }
         }
         // Resolve the sender's saved subtitle choice against the tracks CAF has published.
@@ -531,10 +727,11 @@
             const active = (playerManager.getTextTracksManager().getActiveTracks() || []).map(t => t.trackId);
             const settled = Array.isArray(desired) && active.length === desired.length && desired.every(id => active.includes(id));
             if (!settled && attempt < 10) {
-                setTimeout(() => refreshTrackOverlay(attempt + 1), 200);
+                if (refreshOverlayTimer) clearTimeout(refreshOverlayTimer);
+                refreshOverlayTimer = setTimeout(() => refreshTrackOverlay(attempt + 1), 200);
                 return;
             }
-            showOverlay(document.getElementById('channel-title').textContent, currentTrackSummary(), null, 4000);
+            showOverlay((titleEl || document.getElementById('channel-title')).textContent, currentTrackSummary(), null, 4000, 'state-playing');
         }
 
         // Intercept LOAD request to read metadata and preferred audio
@@ -549,18 +746,44 @@
             vodDesiredTextIds = undefined;
             vodTextAppliedAt = 0;
             vodCodecWarning = null;
-            clearTimeout(vodCodecWarningTimer);
+            if (vodCodecWarningTimer) clearTimeout(vodCodecWarningTimer);
             vodCodecWarningTimer = null;
             vodCodecReported = false;
             livePlayed = false;
+            cachedVideoEl = null;
+            if (loadCompleteTimer) clearTimeout(loadCompleteTimer);
+            loadCompleteTimer = null;
+            if (refreshOverlayTimer) clearTimeout(refreshOverlayTimer);
+            refreshOverlayTimer = null;
+            if (bufferingOverlayTimer) clearTimeout(bufferingOverlayTimer);
+            bufferingOverlayTimer = null;
+            stopVodFrameWatch();
+            refreshLiteDevice();
             if (media) {
-                if (!isVod && media.contentUrl && media.contentUrl.endsWith('.ts')) {
-                    media.contentUrl = media.contentUrl.replace(/\.ts$/, '.m3u8');
+                if (!isVod && media.contentUrl && /\.ts(?=$|\?)/i.test(media.contentUrl)) {
+                    media.contentUrl = media.contentUrl.replace(/\.ts(?=$|\?)/i, '.m3u8');
                     media.contentType = 'application/x-mpegurl';
                 }
-                if (!isVod && media.contentId && media.contentId.endsWith('.ts')) {
-                    media.contentId = media.contentId.replace(/\.ts$/, '.m3u8');
+                if (!isVod && media.contentId && /\.ts(?=$|\?)/i.test(media.contentId)) {
+                    media.contentId = media.contentId.replace(/\.ts(?=$|\?)/i, '.m3u8');
                     media.contentType = 'application/x-mpegurl';
+                }
+                if (!media.contentType) {
+                    const rawUrl = media.contentUrl || media.contentId || '';
+                    const urlPath = rawUrl.split(/[?#]/)[0].toLowerCase();
+                    if (urlPath.endsWith('.m3u8') || urlPath.endsWith('.m3u')) {
+                        media.contentType = 'application/x-mpegurl';
+                    } else if (urlPath.endsWith('.mpd')) {
+                        media.contentType = 'application/dash+xml';
+                    } else if (urlPath.endsWith('.mp4') || urlPath.endsWith('.m4v')) {
+                        media.contentType = 'video/mp4';
+                    } else if (urlPath.endsWith('.webm')) {
+                        media.contentType = 'video/webm';
+                    } else if (urlPath.endsWith('.mkv')) {
+                        media.contentType = 'video/x-matroska';
+                    } else if (urlPath.endsWith('.ts')) {
+                        media.contentType = 'video/mp2t';
+                    }
                 }
                 media.streamType = isVod ? cast.framework.messages.StreamType.BUFFERED
                     : cast.framework.messages.StreamType.LIVE;
@@ -583,7 +806,7 @@
             preferredSubtitleName = customData?.preferredSubtitleName || '';
             currentLanguage = customData?.language === 'sv' ? 'sv' : 'en';
             currentVodGateway = customData?.vodGateway === true;
-            clearTimeout(reportPlayedTimer);
+            if (reportPlayedTimer) clearTimeout(reportPlayedTimer);
             reportPlayedTimer = null;
             reportLoadAt = Date.now();
             reportStartupMs = undefined;
@@ -661,14 +884,20 @@
 
                 if (typeof context.canDisplayType === 'function') {
                     let supported = true;
+                    let codecOnlySupported = true;
                     try {
                         supported = context.canDisplayType(checkMime, codecs || undefined, width, height);
+                        if (!supported && codecs && (width || height)) {
+                            codecOnlySupported = context.canDisplayType(checkMime, codecs);
+                        } else {
+                            codecOnlySupported = supported;
+                        }
                     } catch (e) {
                         (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] canDisplayType check failed:', e);
                         supported = true;
                     }
                     console.log('[EasyChannel IPTV Receiver] canDisplayType result:', {
-                        checkMime, codecs, width, height, supported
+                        checkMime, codecs, width, height, supported, codecOnlySupported
                     });
                     if (!supported) {
                         (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Device says the video format is unsupported; trying anyway:', {
@@ -680,15 +909,32 @@
                             mime: videoMime || checkMime,
                             codecs: codecs,
                             width: width,
-                            height: height
+                            height: height,
+                            codecOnlySupported: codecOnlySupported
                         };
                     }
                 }
             }
 
-            showOverlay(title, tr('loading'), logo, 8000);
+            showOverlay(title, tr('loading'), logo, 8000, 'state-loading');
             return loadRequestData;
         });
+
+        // Apply per-load playback & buffer tuning dynamically (covers devices detected as lite after context.start).
+        if (typeof playerManager.setMediaPlaybackInfoHandler === 'function') {
+            playerManager.setMediaPlaybackInfoHandler((loadRequestData, config) => {
+                refreshLiteDevice();
+                const customData = loadRequestData?.customData || loadRequestData?.media?.customData;
+                const isVod = customData?.vod === true;
+                config.autoResumeDuration = isVod ? 3 : 2;
+                if (LITE_DEVICE) {
+                    config.shakaConfig = { streaming: { bufferingGoal: 8, rebufferingGoal: 2, bufferBehind: 2 } };
+                } else if (isVod) {
+                    config.shakaConfig = { streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 15 } };
+                }
+                return config;
+            });
+        }
 
         // Intercept EDIT_TRACKS_INFO to allow sender to switch audio tracks via standard Cast API
         playerManager.setMessageInterceptor(cast.framework.messages.MessageType.EDIT_TRACKS_INFO, request => {
@@ -721,12 +967,13 @@
                     }
                     if (audioMatch) {
                         console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', audioMatch.trackId, audioMatch.language);
-                        audioManager.setActiveById(audioMatch.trackId);
+                        try { audioManager.setActiveById(audioMatch.trackId); } catch (_) {}
+                        audioPreferenceApplied = true;
                         if (currentIsVod) {
                             refreshTrackOverlay();
                         } else {
-                            showOverlay(document.getElementById('channel-title').textContent,
-                                tr('audio') + ': ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000);
+                            showOverlay((titleEl || document.getElementById('channel-title')).textContent,
+                                tr('audio') + ': ' + (audioMatch.name || audioMatch.language || audioMatch.trackId), null, 4000, 'state-playing');
                         }
                         broadcastTrackList();
                         const textIds = currentIsVod ? request.activeTrackIds.filter(id =>
@@ -748,125 +995,205 @@
 
             if (currentIsVod) {
                 applyVodAudioPreference();
-            } else if (preferredLanguage || preferredAudioIndex >= 0) {
-                const normTarget = normalizeLang(preferredLanguage);
-                let matchedTrack = pickAudioTrack(tracks, preferredLanguage, preferredAudioName, preferredAudioIndex);
-                if (!matchedTrack && preferredLanguage) {
-                    matchedTrack = tracks.find(t => {
-                        const name = (t.name || '').toLowerCase();
-                        return name.includes(preferredLanguage.toLowerCase()) || (normTarget && name.includes(normTarget));
-                    });
-                }
-                if (matchedTrack) {
-                    console.log('[EasyChannel IPTV Receiver] Selecting initial audio track by ID:', matchedTrack.trackId, matchedTrack.language);
-                    audioManager.setActiveById(matchedTrack.trackId);
-                } else if (preferredLanguage) {
-                    try {
-                        audioManager.setActiveByLanguage(preferredLanguage);
-                    } catch (err) {
-                        console.warn('[EasyChannel IPTV Receiver] Preferred audio language unavailable:', preferredLanguage, err);
-                    }
-                }
+            } else {
+                applyLiveAudioPreference();
             }
 
             const currentActive = audioManager.getActiveTrack();
             const langLabel = currentActive ? (currentActive.name || currentActive.language || 'Standard') : 'Standard';
             if (!currentIsVod) {
-                showOverlay(document.getElementById('channel-title').textContent, tr('playing') + ' • ' + langLabel, null, 5000);
+                showOverlay((titleEl || document.getElementById('channel-title')).textContent, tr('playing') + ' • ' + langLabel, null, 5000, 'state-playing');
             }
 
             // Send full track list back to Android sender app
-            setTimeout(() => { enforceVodTextSelection(true); broadcastTrackList(true); if (currentIsVod) refreshTrackOverlay(); }, 500);
+            if (loadCompleteTimer) clearTimeout(loadCompleteTimer);
+            loadCompleteTimer = setTimeout(() => {
+                if (currentIsVod) {
+                    applyVodAudioPreference();
+                    enforceVodTextSelection(true);
+                    refreshTrackOverlay();
+                } else {
+                    applyLiveAudioPreference();
+                }
+                broadcastTrackList(true);
+            }, 500);
         });
+
+        // React immediately when CAF/Shaka discovers or updates in-band audio/text tracks.
+        if (cast.framework.events.EventType.TRACKS_CHANGED) {
+            playerManager.addEventListener(cast.framework.events.EventType.TRACKS_CHANGED, () => {
+                if (currentIsVod) {
+                    applyVodAudioPreference();
+                    enforceVodTextSelection();
+                } else {
+                    applyLiveAudioPreference();
+                }
+                broadcastTrackList();
+            });
+        }
 
         // Custom Message Channel for direct sender commands
         function handleCustomMessage(event) {
-            const data = event.data;
-            console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
-
-            if (data.type === 'GET_CAPABILITIES') {
-                // Audio the TV's player takes through HLS/DASH (MSE). A Chromecast with Google TV
-                // answers no for E-AC-3 and plays it silently even as a plain MP4, so the sender
-                // converts that audio for this device instead of sending it as it is.
-                const supported = (codec) => {
-                    try {
-                        return typeof MediaSource !== 'undefined' &&
-                            MediaSource.isTypeSupported('audio/mp4; codecs="' + codec + '"');
-                    } catch (_) { return false; }
-                };
-                // hevc false marks an older Chromecast (gen 1-3): the sender then sends stereo audio
-                // from the start instead of learning it from error 100 on 5.1 AAC. fullHd false: the
-                // sender leaves a 1080p video's size out of the manifest (canShowFullHd).
-                const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc(),
-                    fullHd: canShowFullHd(), lite: LITE_AT_START, memory: navigator.deviceMemory, receiver: RECEIVER_VERSION };
-                console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
-                try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
-                catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
-                return;
-            }
-            if (data.type === 'SELECT_TEXT_TRACK') {
-                const manager = playerManager.getTextTracksManager();
-                vodDesiredTextIds = data.trackId == null ? [] : [Number(data.trackId)];
-                manager.setActiveByIds(vodDesiredTextIds);
-                broadcastTrackList(true);
-                refreshTrackOverlay();
-            } else if (data.type === 'SELECT_AUDIO_TRACK') {
-                const manager = playerManager.getAudioTracksManager();
-                manager.setActiveById(Number(data.trackId));
-                audioPreferenceApplied = true;
-                broadcastTrackList(true);
-                refreshTrackOverlay();
-            } else if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
-                const audioManager = playerManager.getAudioTracksManager();
-                const tracks = audioManager.getTracks() || [];
-                let match = null;
-
-                // Priority 1: Match by exact trackId
-                if (data.trackId !== undefined && data.trackId !== null) {
-                    match = tracks.find(t => t.trackId === Number(data.trackId));
+            try {
+                let data = event && event.data;
+                if (typeof data === 'string') {
+                    try { data = JSON.parse(data); } catch (_) { return; }
                 }
+                if (!data || typeof data !== 'object') return;
+                console.log('[EasyChannel IPTV Receiver] Custom message received:', data);
 
-                // Priority 2: Match by language (+ name if available)
-                if (!match && data.language) {
-                    match = tracks.find(t => matchLang(t.language, data.language) && (!data.name || t.name === data.name))
-                         || tracks.find(t => matchLang(t.language, data.language));
+                if (data.type === 'GET_CAPABILITIES') {
+                    // Audio the TV's player takes through HLS/DASH (MSE). A Chromecast with Google TV
+                    // answers no for E-AC-3 and plays it silently even as a plain MP4, so the sender
+                    // converts that audio for this device instead of sending it as it is.
+                    const supported = (codec) => {
+                        try {
+                            return typeof MediaSource !== 'undefined' &&
+                                MediaSource.isTypeSupported('audio/mp4; codecs="' + codec + '"');
+                        } catch (_) { return false; }
+                    };
+                    // hevc false marks an older Chromecast (gen 1-3): the sender then sends stereo audio
+                    // from the start instead of learning it from error 100 on 5.1 AAC. fullHd false: the
+                    // sender leaves a 1080p video's size out of the manifest (canShowFullHd).
+                    refreshLiteDevice();
+                    const caps = deviceCaps();
+                    const reply = { type: 'CAPABILITIES', ec3: supported('ec-3'), ac3: supported('ac-3'), hevc: canDecodeHevc(),
+                        fullHd: canShowFullHd(), h264_l42: caps.h264_l42, lite: LITE_DEVICE, memory: navigator.deviceMemory, receiver: RECEIVER_VERSION };
+                    console.log('[EasyChannel IPTV Receiver] capabilities:', reply);
+                    try { context.sendCustomMessage(event.namespace || CUSTOM_CHANNEL, event.senderId, reply); }
+                    catch (err) { (console.warn || console.log || (() => {}))('[EasyChannel IPTV Receiver] Failed to send capabilities:', err); }
+                    return;
                 }
-
-                if (match) {
-                    console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', match.trackId, match.language, match.name);
-                    audioManager.setActiveById(match.trackId);
-                    showOverlay(document.getElementById('channel-title').textContent, tr('audio') + ': ' + (match.name || match.language || match.trackId), null, 4000);
-                    broadcastTrackList();
-                }
-            } else if (data.type === 'SELECT_LANGUAGE') {
-                const audioManager = playerManager.getAudioTracksManager();
-                const tracks = audioManager.getTracks() || [];
-                const match = tracks.find(t => matchLang(t.language, data.language));
-                if (match) {
-                    audioManager.setActiveById(match.trackId);
-                } else {
-                    try {
-                        audioManager.setActiveByLanguage(data.language);
-                    } catch (err) {
-                        console.warn('[EasyChannel IPTV Receiver] Language unavailable:', data.language, err);
+                if (data.type === 'SELECT_TEXT_TRACK') {
+                    const manager = playerManager.getTextTracksManager();
+                    vodDesiredTextIds = (data.trackId == null || Number.isNaN(Number(data.trackId))) ? [] : [Number(data.trackId)];
+                    try { manager.setActiveByIds(vodDesiredTextIds); } catch (err) { console.warn('[EasyChannel IPTV Receiver] Failed to set text track:', err); }
+                    vodTextAppliedAt = Date.now();
+                    broadcastTrackList(true);
+                    refreshTrackOverlay();
+                } else if (data.type === 'SELECT_AUDIO_TRACK') {
+                    const manager = playerManager.getAudioTracksManager();
+                    const id = Number(data.trackId);
+                    if (!Number.isNaN(id)) {
+                        try { manager.setActiveById(id); } catch (err) { console.warn('[EasyChannel IPTV Receiver] Failed to set audio track:', err); }
+                        audioPreferenceApplied = true;
+                        broadcastTrackList(true);
+                        refreshTrackOverlay();
                     }
+                } else if (data.type === 'SELECT_TRACK' || data.type === 'SELECT_TRACK_ID') {
+                    const audioManager = playerManager.getAudioTracksManager();
+                    const tracks = audioManager.getTracks() || [];
+                    let match = null;
+
+                    // Priority 1: Match by exact trackId
+                    if (data.trackId !== undefined && data.trackId !== null) {
+                        match = tracks.find(t => t.trackId === Number(data.trackId));
+                    }
+
+                    // Priority 2: Match by language (+ name if available)
+                    if (!match && data.language) {
+                        match = tracks.find(t => matchLang(t.language, data.language) && (!data.name || t.name === data.name))
+                             || tracks.find(t => matchLang(t.language, data.language));
+                    }
+
+                    if (match) {
+                        console.log('[EasyChannel IPTV Receiver] Setting active audio track to ID:', match.trackId, match.language, match.name);
+                        try { audioManager.setActiveById(match.trackId); } catch (_) {}
+                        audioPreferenceApplied = true;
+                        showOverlay((titleEl || document.getElementById('channel-title')).textContent, tr('audio') + ': ' + (match.name || match.language || match.trackId), null, 4000, 'state-playing');
+                        broadcastTrackList();
+                    }
+                } else if (data.type === 'SELECT_LANGUAGE') {
+                    const audioManager = playerManager.getAudioTracksManager();
+                    const tracks = audioManager.getTracks() || [];
+                    const match = tracks.find(t => matchLang(t.language, data.language));
+                    if (match) {
+                        try { audioManager.setActiveById(match.trackId); } catch (_) {}
+                        audioPreferenceApplied = true;
+                    } else if (data.language) {
+                        try {
+                            audioManager.setActiveByLanguage(data.language);
+                            audioPreferenceApplied = true;
+                        } catch (err) {
+                            console.warn('[EasyChannel IPTV Receiver] Language unavailable:', data.language, err);
+                        }
+                    }
+                    broadcastTrackList();
+                } else if (data.type === 'QUERY_TRACKS') {
+                    broadcastTrackList(true);
                 }
-                broadcastTrackList();
-            } else if (data.type === 'QUERY_TRACKS') {
-                broadcastTrackList(true);
+            } catch (err) {
+                console.warn('[EasyChannel IPTV Receiver] Error handling custom message:', err);
             }
         }
 
         // Some VOD containers publish tracks after the initial load callback. Re-assert the
         // chosen audio/subtitle tracks so a seek or pause cannot silently drop or duplicate them.
         setInterval(() => {
-            if (currentIsVod) { applyVodAudioPreference(); enforceVodTextSelection(); broadcastTrackList(); }
+            const state = typeof playerManager.getPlayerState === 'function' ? playerManager.getPlayerState() : undefined;
+            if (state === 'IDLE') return;
+            if (currentIsVod) {
+                applyVodAudioPreference();
+                enforceVodTextSelection();
+                broadcastTrackList();
+            } else {
+                applyLiveAudioPreference();
+                broadcastTrackList();
+            }
         }, 1000);
+
+        // Debounced buffering overlay so real stalls (>1.5s) inform the viewer without flashing on micro-buffers.
+        if (cast.framework.events.EventType.BUFFERING) {
+            playerManager.addEventListener(cast.framework.events.EventType.BUFFERING, (event) => {
+                if (bufferingOverlayTimer) {
+                    clearTimeout(bufferingOverlayTimer);
+                    bufferingOverlayTimer = null;
+                }
+                if (event && event.isBuffering) {
+                    if (livePlayed || (currentIsVod && reportStartupMs !== undefined)) {
+                        bufferingOverlayTimer = setTimeout(() => {
+                            if (!errorOverlayShown) {
+                                showOverlay((titleEl || document.getElementById('channel-title')).textContent, tr('loading'), null, 0, 'state-loading');
+                            }
+                        }, 1500);
+                    }
+                } else if (!errorOverlayShown && (livePlayed || reportStartupMs !== undefined)) {
+                    const overlay = overlayEl || document.getElementById('channel-overlay');
+                    if (overlay.classList.contains('state-loading')) {
+                        overlay.classList.remove('visible');
+                    }
+                }
+            });
+        }
+
+        // Clean up active watchers, timers, and cached logo image when playback ends or is stopped.
+        [cast.framework.events.EventType.MEDIA_FINISHED, cast.framework.events.EventType.REQUEST_STOP].forEach(evt => {
+            if (evt) playerManager.addEventListener(evt, () => {
+                clearLoadTimers();
+                const lEl = logoEl || document.getElementById('channel-logo');
+                if (lEl) {
+                    lEl.style.display = 'none';
+                    lEl.removeAttribute('src');
+                }
+            });
+        });
 
         // A format the device doubted has played for a while: later errors are not about the codec.
         // Counted from the first PLAYING only; seeking or pausing must not keep the warning alive.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYING, () => {
-            if (!currentIsVod) livePlayed = true;
+            if (bufferingOverlayTimer) {
+                clearTimeout(bufferingOverlayTimer);
+                bufferingOverlayTimer = null;
+            }
+            const firstPlay = !livePlayed && !currentIsVod;
+            if (!currentIsVod) {
+                livePlayed = true;
+                applyLiveAudioPreference();
+            } else {
+                applyVodAudioPreference();
+                enforceVodTextSelection();
+            }
+            broadcastTrackList();
             if (reportMedia && reportStartupMs === undefined) {
                 reportStartupMs = Date.now() - reportLoadAt;
                 const played = reportMedia;
@@ -876,7 +1203,16 @@
             }
             if (errorOverlayShown) {
                 errorOverlayShown = false;
-                document.getElementById('channel-overlay').classList.remove('visible');
+                (overlayEl || document.getElementById('channel-overlay')).classList.remove('visible');
+            } else if (firstPlay) {
+                const activeAudio = playerManager.getAudioTracksManager().getActiveTrack();
+                const langLabel = activeAudio ? (activeAudio.name || activeAudio.language || 'Standard') : 'Standard';
+                showOverlay((titleEl || document.getElementById('channel-title')).textContent, tr('playing') + ' • ' + langLabel, null, 4000, 'state-playing');
+            } else {
+                const overlay = overlayEl || document.getElementById('channel-overlay');
+                if (overlay.classList.contains('state-loading')) {
+                    overlay.classList.remove('visible');
+                }
             }
             if (!vodCodecWarning || vodCodecWarningTimer) return;
             if (currentIsVod) watchVodFrames();
@@ -894,15 +1230,22 @@
                 error: event.error,
                 triggeredByEventType: event.triggeredByEventType
             });
+            const errCodeNum = Number(event.detailedErrorCode);
             const errDetail = event.detailedErrorCode || event.reason || tr('unknown');
-            const overlayTitle = document.getElementById('channel-title').textContent || 'EasyChannel IPTV';
+            const overlayTitle = (titleEl || document.getElementById('channel-title')).textContent || 'EasyChannel IPTV';
             if (vodCodecReported) {
                 // Follow-up errors of a format failure already explained to the sender.
                 return;
             }
             // Live decode failures show up as segment errors (310, 410) as well, so for live any error
             // before the first PLAYING counts once the device has doubted the format.
-            const codecFailure = currentIsVod ? CODEC_ERROR_CODES.includes(Number(event.detailedErrorCode))
+            // For direct VOD (!currentVodGateway), generic load error 905 can be caused by provider
+            // HTTP redirects or missing CORS headers; if the codec itself is supported without size,
+            // let the sender fall back to VodGateway instead of permanently blaming the codec.
+            const directLoadNetworkAmbiguous = currentIsVod && !currentVodGateway && errCodeNum === 905 &&
+                vodCodecWarning && vodCodecWarning.codecOnlySupported === true;
+            const codecFailure = currentIsVod
+                ? (CODEC_ERROR_CODES.includes(errCodeNum) && !directLoadNetworkAmbiguous)
                 : !livePlayed;
             if (vodCodecWarning && codecFailure) {
                 reportCodecFailure(event);
@@ -914,7 +1257,7 @@
             const critical = severities.CRITICAL !== undefined ? severities.CRITICAL : 2;
             reportPlaybackError('error', event, event.severity === undefined || event.severity === critical);
             if (event.severity === undefined || event.severity === critical) {
-                showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0);
+                showOverlay(overlayTitle, tr('error') + ': ' + errDetail, null, 0, 'state-error');
                 errorOverlayShown = true;
             }
             try {
@@ -943,7 +1286,7 @@
         context.addCustomMessageListener(CUSTOM_CHANNEL, handleCustomMessage);
         context.addCustomMessageListener(LEGACY_CHANNEL, handleCustomMessage);
 
-        document.getElementById('channel-status').textContent = tr('connected');
+        (statusEl || document.getElementById('channel-status')).textContent = tr('connected');
 
         // Handle remote control keys (e.g. Android TV / Google TV remote Back button)
         window.addEventListener('keydown', (event) => {
@@ -969,15 +1312,17 @@
         // would always play the default audio. The native Cast HLS player
         // handles the proxy's single-variant muxed TS correctly.
         const playbackConfig = new cast.framework.PlaybackConfig();
-        playbackConfig.autoResumeDuration = 5;
+        playbackConfig.autoResumeDuration = 2;
         // Chromium caps an H.264 MSE video buffer at 30 MiB on Cast. Gateway VOD segments are 10 s
         // and 4-7 MB, so Shaka's default goal plus 30 s kept behind reaches the cap; appends then
         // fail and playback ends in error 100. An older Chromecast (no HEVC) keeps the total near
         // 25 s. Shaka plays only DASH here (live HLS uses the native player) and reads this when
         // the player is created, so it has to be in the config given to context.start.
         if (LITE_DEVICE) {
-            playbackConfig.shakaConfig = { streaming: { bufferingGoal: 10, rebufferingGoal: 2, bufferBehind: 2 } };
-            console.log('[EasyChannel IPTV Receiver] older Chromecast: small VOD buffer', playbackConfig.shakaConfig.streaming);
+            playbackConfig.shakaConfig = { streaming: { bufferingGoal: 8, rebufferingGoal: 2, bufferBehind: 2 } };
+            console.log('[EasyChannel IPTV Receiver] low-memory/lite device: small VOD buffer', playbackConfig.shakaConfig.streaming);
+        } else {
+            playbackConfig.shakaConfig = { streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 15 } };
         }
 
         context.start({
@@ -989,12 +1334,10 @@
             }
         });
         console.log('[EasyChannel IPTV Receiver] Cast Receiver Context started');
-        // Once started, canDisplayType answers; an older Chromecast missed above still gets the light
-        // overlay. Its buffer stays as set, since Shaka reads it only when the player is created.
-        if (!LITE_DEVICE && canDecodeHevc() === false) {
-            LITE_DEVICE = true;
-            document.body.classList.add('lite');
-        }
+        // Once started, canDisplayType answers; older Chromecasts and 1080p-only Android TV sticks
+        // missed above still get the light overlay, and setMediaPlaybackInfoHandler applies the small
+        // VOD buffer on each load.
+        refreshLiteDevice();
     </script>
 </body>
 </html>
