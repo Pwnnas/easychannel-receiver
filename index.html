@@ -166,7 +166,7 @@
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         // Sent in CAPABILITIES so the sender's log shows which receiver a (possibly cached) TV runs.
-        const RECEIVER_VERSION = 2026111402;
+        const RECEIVER_VERSION = 2026111701;
         // Older Chromecasts (gen 1-3: no HEVC, 512 MB, weak GPU) and 1 GB / 1080p-only Android TV
         // sticks (e.g. Xiaomi TV Stick HD, Mi TV Stick) get a lighter overlay without channel logos
         // and a smaller Shaka MSE buffer so 1080p50 streams stay within RAM without OOM/stalling.
@@ -443,6 +443,22 @@
         function withoutUrls(text) {
             return text == null ? undefined : String(text).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>').slice(0, 200);
         }
+        const SHAKA_REQUEST_TYPES = ['manifest', 'segment', 'license', 'app', 'timing', 'certificate', 'key'];
+        // Where shaka.util.Error.data holds the request type: BAD_HTTP_STATUS, HTTP_ERROR, TIMEOUT.
+        const SHAKA_REQUEST_TYPE_AT = { 1001: 4, 1002: 2, 1003: 1 };
+        // CAF puts Shaka's error in event.error and leaves event.reason empty for network errors (310, 410).
+        // Only the codes leave the TV: data also holds the URL and the response, which can carry the login.
+        function errorDetail(error) {
+            const detail = {};
+            const shaka = error && error.shakaErrorCode;
+            if (!Number.isInteger(shaka)) return detail;
+            detail.shaka = shaka;
+            const data = Array.isArray(error.shakaErrorData) ? error.shakaErrorData : [];
+            if (shaka === 1001 && Number.isInteger(data[1]) && data[1] >= 100 && data[1] < 600) detail.http = data[1];
+            const type = data[SHAKA_REQUEST_TYPE_AT[shaka]];
+            if (Number.isInteger(type) && SHAKA_REQUEST_TYPES[type]) detail.request = SHAKA_REQUEST_TYPES[type];
+            return detail;
+        }
         // Asked once, after the context has started (getDeviceCapabilities is empty before that).
         function deviceCaps() {
             if (reportCaps) return reportCaps;
@@ -492,14 +508,18 @@
         function reportPlaybackError(kind, event, critical) {
             if (critical) reportFailed = true;
             const code = Number(event && event.detailedErrorCode);
-            const key = kind + ':' + (Number.isFinite(code) ? code : (event && event.reason));
+            let detail = {};
+            try { detail = errorDetail(event && event.error); } catch (_) {}
+            // Every network error is 310 or 410: the detail tells a refused connection from a missing segment.
+            const key = kind + ':' + (Number.isFinite(code) ? code : (event && event.reason)) + ':' +
+                [detail.shaka, detail.http, detail.request].join(':');
             if (reportedErrors.has(key)) return;
             reportedErrors.add(key);
-            sendReport(kind, {
+            sendReport(kind, Object.assign({
                 code: Number.isFinite(code) ? code : undefined,
                 reason: withoutUrls(event && event.reason),
                 severity: event && typeof event.severity === 'number' ? event.severity : undefined
-            });
+            }, detail));
         }
         function stopDoubtedWatch() {
             if (doubtedWatch) clearInterval(doubtedWatch);
